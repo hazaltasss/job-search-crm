@@ -206,10 +206,10 @@ with col_header_btn:
     if st.button("🔄 Yeni İlanları Tara", use_container_width=True, type="secondary"):
         with st.spinner("İlan siteleri taranıyor ve filtreleniyor..."):
             try:
-                from main import main as run_pipeline
+                from scripts.run_pipeline import main as run_pipeline
                 run_pipeline()
                 st.cache_data.clear()
-                st.success("Taram tamamlandı! İlanlar güncellendi.")
+                st.success("Tarama tamamlandı! İlanlar güncellendi.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Tarama hatası: {e}")

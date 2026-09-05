@@ -42,4 +42,4 @@ jobs:
           GOOGLE_SHEET_ID:      ${{ secrets.GOOGLE_SHEET_ID }}
           GCP_SA_KEY_B64:       ${{ secrets.GCP_SA_KEY_B64 }}
           GEMINI_API_KEY:       ${{ secrets.GEMINI_API_KEY }}
-        run: python weekly_report.py
+        run: python scripts/weekly_report.py

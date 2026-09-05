@@ -22,16 +22,22 @@ The project is an autonomous job discovery, application optimization, and person
 
 ```
 ├── dashboard.py               # Streamlit UI: 3-tab CRM, Market Analytics, Job Matcher & Email Hub
-├── main.py                    # Scraper orchestration & ingestion pipeline
-├── bot_server.py              # Long-polling Telegram bot listener for inline callbacks
-├── weekly_report.py           # Weekly analytics digest generator
-├── seed_demo_data.py          # Demo data generator for local UI testing
+├── main.py                    # Scraper orchestration root runner (calls scripts/run_pipeline.py)
 ├── requirements.txt           # Python dependencies
 ├── .env.example               # Template of required environment variables
 ├── .gitignore                 # Strict credential and artifact ignore rules
+├── AGENTS.md                  # Development guidelines for AI agents
+├── architecture.md            # Detailed system design & architecture documentation
+├── README.md                  # User-facing setup & usage documentation
 ├── data/
 │   ├── master_cv.json         # Hazal Taş master profile (experience, skills, education)
 │   └── jobs.db                # SQLite database (auto-generated, gitignored)
+├── scripts/
+│   ├── __init__.py
+│   ├── run_pipeline.py        # Primary fetch, filter, dedup & notify orchestration
+│   ├── bot_server.py          # Long-polling Telegram bot listener for inline callbacks
+│   ├── weekly_report.py       # Weekly analytics digest generator (Monday cron)
+│   └── seed_demo_data.py      # Demo data generator for local UI testing
 ├── src/
 │   ├── __init__.py
 │   ├── config.py              # Configuration constants, keywords, regex patterns, paths

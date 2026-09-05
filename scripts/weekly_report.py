@@ -1,9 +1,18 @@
 """
 weekly_report.py — Standalone script for the Monday weekly digest.
-Executed by GitHub Actions cron (Monday 08:00 CET).
+Executed by GitHub Actions cron (Monday 08:00 CET) or manually.
+
+Usage:
+    python scripts/weekly_report.py
 """
 import logging
 import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from rich.logging import RichHandler
 

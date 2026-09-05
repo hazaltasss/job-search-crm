@@ -4,14 +4,20 @@ bot_server.py — Long-polling bot listener.
 Run this locally (or on a VPS / Railway / Fly.io) to receive and respond
 to Telegram inline button callbacks in real time.
 
-The GitHub Actions cron job (main.py) sends new job notifications.
-This server handles the interactive button responses (Applied, Skip, etc.)
+The GitHub Actions cron job (run_pipeline.py) sends new job notifications.
+This server handles interactive button responses (Applied, Skip, Cover Letter, etc.)
 
 Usage:
-    python bot_server.py
+    python scripts/bot_server.py
 """
 import logging
 import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from rich.logging import RichHandler
 

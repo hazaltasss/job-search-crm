@@ -47,10 +47,7 @@ Built with **Python**, **Streamlit**, **SQLite**, and **Google Gemini AI (`gemin
 
 ```
 ├── dashboard.py               # Streamlit web UI (Market Intel, Job Matcher, CRM Hub)
-├── main.py                    # Scraper orchestration & ingestion pipeline
-├── bot_server.py              # Long-polling Telegram bot listener for inline callbacks
-├── weekly_report.py           # Weekly analytics digest generator
-├── seed_demo_data.py          # Demo data generator for local UI testing
+├── main.py                    # Scraper orchestration root runner (calls scripts/run_pipeline.py)
 ├── requirements.txt           # Python dependencies
 ├── .env.example               # Environment variable templates
 ├── .gitignore                 # Credential and artifact ignore rules
@@ -59,6 +56,12 @@ Built with **Python**, **Streamlit**, **SQLite**, and **Google Gemini AI (`gemin
 ├── data/
 │   ├── master_cv.json         # Candidate master profile (Hazal Taş)
 │   └── jobs.db                # SQLite database (auto-generated, gitignored)
+├── scripts/
+│   ├── __init__.py
+│   ├── run_pipeline.py        # Primary fetch, filter, dedup & notify pipeline
+│   ├── bot_server.py          # Long-polling Telegram bot listener for inline callbacks
+│   ├── weekly_report.py       # Weekly analytics digest generator (Monday cron)
+│   └── seed_demo_data.py      # Demo data generator for local UI testing
 └── src/
     ├── config.py              # Keywords, regexes, and environment settings
     ├── models.py              # Job dataclass model
@@ -140,14 +143,21 @@ Open **`http://localhost:8501`** in your browser to access:
 ### 2. Fetch Latest Jobs Manually
 ```bash
 python main.py
+# or directly:
+python scripts/run_pipeline.py
 ```
 Scrapes all configured sources, applies the strict English filter, deduplicates, and saves new listings to `data/jobs.db`.
 
 ### 3. Start the Telegram Bot Listener (Optional)
 ```bash
-python bot_server.py
+python scripts/bot_server.py
 ```
 Runs the interactive Telegram bot to handle button clicks (`Applied`, `Cover Letter`, `Tailor CV`) directly from mobile alerts.
+
+### 4. Seed Demo Data for Testing (Optional)
+```bash
+python scripts/seed_demo_data.py
+```
 
 ---
 

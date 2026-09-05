@@ -6,7 +6,7 @@ Two modes of operation:
      - Standalone: creates a Bot instance and sends messages, then exits.
      - No long-running process needed.
 
-  2. LISTENER MODE (used by bot_server.py, run locally):
+  2. LISTENER MODE (used by scripts/bot_server.py, run locally):
      - Runs long-polling to receive button callback queries from users.
      - Handles: Applied, Skip, Save, Cover Letter, Tailor CV actions.
 """

@@ -1,16 +1,19 @@
 """
 seed_demo_data.py — Dashboard'u test etmek için sahte ilanlar yükler.
-Gerçek scraping başlamadan önce UI'yi görmek için kullan.
+Gerçek scraping başlamadan önce UI'yi görmek için kullanılır.
 
-Çalıştırma:
-    python seed_demo_data.py
+Usage:
+    python scripts/seed_demo_data.py
 """
 import sys
 import os
 from pathlib import Path
+from datetime import datetime, timezone
 
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT))
+# Ensure project root is on sys.path
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 # Env placeholder so config.py doesn't crash
 for _v in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "GOOGLE_SHEET_ID", "GEMINI_API_KEY"]:
@@ -19,7 +22,6 @@ for _v in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "GOOGLE_SHEET_ID", "GEMINI_
 
 from src.database import init_db, insert_job, is_duplicate
 from src.models import Job
-from datetime import datetime, timezone
 
 now = datetime.now(timezone.utc).isoformat()
 

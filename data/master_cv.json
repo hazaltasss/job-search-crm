@@ -1,0 +1,159 @@
+{
+  "personal": {
+    "name": "Hazal Taş",
+    "email": "hazaltas.623@gmail.com",
+    "phone": "+49 155 1098 2021",
+    "location": "Berlin, Germany",
+    "linkedin": "[LinkedIn Profile Link]",
+    "github": "[GitHub Profile Link]",
+    "portfolio": ""
+  },
+  "summary": "Computer Engineer and Master's student in Data Analytics & AI with practical software engineering experience at Softtech A.Ş. Specialized in designing Generative AI pipelines, Retrieval-Augmented Generation (RAG), and agentic workflows using modern LLM architectures and Python. Strong engineering foundation in asynchronous API development, database optimization, and end-to-end machine learning lifecycle management.",
+  "education": [
+    {
+      "degree": "Master of Science (M.Sc.)",
+      "field": "Business Management (Specialization: Data Analytics & AI)",
+      "institution": "Steinbeis University",
+      "location": "Berlin, Germany",
+      "start_date": "2026-07",
+      "end_date": "2028-07",
+      "gpa": "",
+      "relevant_courses": [
+        "Data Analytics",
+        "Artificial Intelligence",
+        "Business Management"
+      ],
+      "thesis": ""
+    },
+    {
+      "degree": "Bachelor of Science (B.Sc.)",
+      "field": "Computer Engineering (100% English Instruction)",
+      "institution": "Çukurova University",
+      "location": "Adana, Turkey",
+      "start_date": "2020-09",
+      "end_date": "2024-06",
+      "gpa": "",
+      "relevant_courses": [
+        "Data Structures & Algorithms",
+        "Object-Oriented Programming (OOP)",
+        "Database Management Systems",
+        "Software Engineering"
+      ],
+      "thesis": ""
+    }
+  ],
+  "experience": [
+    {
+      "title": "Software Engineering Intern",
+      "company": "Softtech A.Ş.",
+      "location": "Ankara, Turkey",
+      "type": "Internship",
+      "start_date": "2024-06",
+      "end_date": "2024-08",
+      "is_current": false,
+      "bullets": [
+        "Engineered secure, scalable RESTful backend microservices using Java and Spring Boot to support high-throughput internal data workflows.",
+        "Leveraged Postman and Swagger/OpenAPI to test, debug, and document REST endpoints and authentication flows, ensuring clean cross-platform integration.",
+        "Designed and indexed relational database schemas in MySQL, enhancing query latency and data integrity for master records.",
+        "Built responsive mobile client modules using Flutter, integrating them with backend APIs and structured JSON payloads."
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "AI-Powered Smart Photo Memory Assistant",
+      "description": "Engineered a multimodal semantic retrieval system analyzing visual inputs via Gemini Vision API and vectorizing metadata using 3072-dimensional embeddings for low-latency cosine similarity search. Designed a hybrid search parser decomposing unstructured natural language queries into deterministic SQL filters and semantic vector searches.",
+      "technologies": ["Python", "FastAPI", "SQLite (sqlite-vec)", "Gemini Vision & Embeddings", "React", "Twilio"],
+      "url": "",
+      "bullets": [
+        "Built multimodal semantic retrieval system with Gemini Vision API and 3072-dimensional vector embeddings",
+        "Designed hybrid search parser combining SQL filters with cosine similarity vector search for low-latency queries",
+        "Integrated Twilio for real-time memory retrieval via conversational interface"
+      ]
+    },
+    {
+      "name": "Automated Job Application & Pipeline Agent",
+      "description": "Developed an autonomous end-to-end job tracking and parsing agent scraping real-time postings across European tech job boards twice daily. Integrated Gemini LLM workflows to dynamically parse job descriptions, generate tailored cover letters, and produce ATS-optimized CV drafts.",
+      "technologies": ["Python", "Gemini API", "GitHub Actions", "Google Sheets API", "Telegram Bot"],
+      "url": "",
+      "bullets": [
+        "Scraped real-time job postings across European tech boards twice daily via GitHub Actions cron automation",
+        "Integrated Gemini LLM to generate tailored cover letters and ATS-optimized CV drafts per job description",
+        "Built interactive Telegram bot with inline action buttons and Google Sheets CRM for live status tracking"
+      ]
+    },
+    {
+      "name": "AI Tandem – Conversational Language Partner",
+      "description": "Created an interactive conversational AI application designed for real-time language practice, adaptive dialogue generation, and context-aware feedback with stateful context management.",
+      "technologies": ["Python", "LLM APIs", "Prompt Engineering", "Speech/NLP Pipelines"],
+      "url": "",
+      "bullets": [
+        "Designed stateful context management system for adaptive, personalized dialogue generation",
+        "Implemented real-time language practice flows with context-aware grammar and vocabulary feedback",
+        "Applied advanced prompt engineering for consistent persona and pedagogical tone"
+      ]
+    }
+  ],
+  "skills": {
+    "programming_languages": [
+      "Python (FastAPI, Flask, Pandas, NumPy, Scikit-learn)",
+      "Java (Spring Boot)",
+      "SQL (MySQL, PostgreSQL)",
+      "Dart (Flutter)",
+      "Bash",
+      "Git"
+    ],
+    "generative_ai_and_llms": [
+      "Multimodal AI (Vision/Embeddings)",
+      "Vector Search (sqlite-vec, Pinecone, ChromaDB)",
+      "RAG Pipelines",
+      "Hybrid Search",
+      "LangChain",
+      "Agentic Patterns (Tool Use, Context & State Management)",
+      "Prompt Engineering"
+    ],
+    "backend_and_systems": [
+      "RESTful APIs",
+      "Swagger/OpenAPI",
+      "Asynchronous Event Loops",
+      "Thread Pooling",
+      "CI/CD (GitHub Actions)",
+      "Docker Basics",
+      "Linux"
+    ],
+    "core_competencies": [
+      "Data Structures & Algorithms",
+      "Object-Oriented Programming (OOP)",
+      "Relational Schema Design",
+      "Fault-Tolerant Architectures"
+    ],
+    "tools": [
+      "Postman",
+      "Swagger / OpenAPI",
+      "Docker",
+      "GitHub Actions",
+      "Tableau",
+      "Power BI",
+      "Notion",
+      "Jira"
+    ],
+    "soft_skills": [
+      "Analytical Thinking",
+      "Problem Solving",
+      "Cross-functional Collaboration",
+      "Adaptability"
+    ]
+  },
+  "certifications": [],
+  "languages": [
+    { "language": "Turkish",  "level": "Native" },
+    { "language": "English",  "level": "B1-B2 – Upper Intermediate" },
+    { "language": "German",   "level": "A1 – Beginner (actively learning)" }
+  ],
+  "interests": [
+    "Generative AI & LLM Systems",
+    "Agentic AI Workflows",
+    "Data-Driven Product Development",
+    "Berlin Tech & Startup Ecosystem"
+  ]
+}

@@ -1,0 +1,62 @@
+name: 🔍 Job Fetch & Notify (2× Daily)
+
+on:
+  schedule:
+    # 09:00 CET / CEST (Europe/Berlin timezone)
+    - cron: '0 9,18 * * *'
+      # Note: GitHub Actions uses UTC-based cron. The 'timezone' key
+      # is supported in GitHub-hosted runners.
+      # If your runner doesn't support it, use these UTC equivalents:
+      #   Summer (CEST, UTC+2): '0 7,16 * * *'
+      #   Winter (CET,  UTC+1): '0 8,17 * * *'
+  workflow_dispatch:     # Allow manual trigger for testing
+    inputs:
+      dry_run:
+        description: 'Dry run (fetch but do not send notifications)'
+        required: false
+        default: 'false'
+
+jobs:
+  fetch-and-notify:
+    name: Fetch Jobs & Send Telegram Alerts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🗄️ Restore cached jobs.db
+        uses: actions/cache@v4
+        with:
+          path: data/jobs.db
+          key: jobs-db-${{ runner.os }}
+          restore-keys: |
+            jobs-db-
+
+      - name: 🚀 Run fetch pipeline
+        env:
+          TELEGRAM_BOT_TOKEN:         ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:           ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_SHEET_ID:            ${{ secrets.GOOGLE_SHEET_ID }}
+          GCP_SA_KEY_B64:             ${{ secrets.GCP_SA_KEY_B64 }}
+          GEMINI_API_KEY:             ${{ secrets.GEMINI_API_KEY }}
+        run: python main.py
+
+      - name: 💾 Save updated jobs.db
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data/jobs.db
+          key: jobs-db-${{ runner.os }}-${{ github.run_id }}

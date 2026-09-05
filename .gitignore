@@ -1,0 +1,49 @@
+# Secrets & credentials
+.env
+*.json
+!data/master_cv.json
+!.devcontainer/*.json
+service_account.json
+
+# Database
+data/jobs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs
+*.log
+logs/
+
+# Generated output files (cover letters, CVs)
+output/
+*.docx
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

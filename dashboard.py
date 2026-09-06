@@ -485,6 +485,110 @@ with tab1:
                     st.toast(f"🎯 '{co_name}' filtresi seçildi! Yukarıdan 'Job Matcher & AI Optimizer' sekmesine geçebilirsiniz.")
                     st.rerun()
 
+    # ── Source & Platform Intelligence Dashboard ──────────────────────────────
+    if jobs:
+        st.markdown('<div class="section-header">🌐 İlan Kaynakları & Platform Analiz Paneli</div>', unsafe_allow_html=True)
+        st.caption("Veritabanındaki iş ilanlarının hangi platformlardan çekildiğini inceleyin; tek tıkla doğrudan o kaynağın veya şirketin ilanlarına geçin.")
+
+        SOURCE_DISPLAY_MAP = {
+            "greenhouse": ("🏢 Greenhouse ATS", "#00A86B"),
+            "personio": ("🎯 Personio ATS", "#3F51B5"),
+            "berlinstartupjobs": ("🚀 Berlin Startup Jobs", "#FF6F00"),
+            "linkedin": ("🔗 LinkedIn Jobs", "#0077B5"),
+            "workwise": ("💼 Workwise.io", "#E91E63"),
+            "jobteaser": ("🎓 JobTeaser", "#9C27B0"),
+            "arbeitnow": ("🇩🇪 Arbeitnow", "#4CAF50"),
+            "workingstudentjobs": ("📚 WorkingStudentJobs", "#FF9800"),
+            "hiringcafe": ("☕ HiringCafe", "#795548"),
+        }
+
+        from collections import Counter
+        source_counts = Counter(j.get("source", "other").lower() for j in jobs)
+
+        source_stats = []
+        for src_raw, count in source_counts.most_common():
+            disp_name, color = SOURCE_DISPLAY_MAP.get(src_raw, (f"🌐 {src_raw.capitalize()}", "#607D8B"))
+            src_companies = Counter(j.get("company", "") for j in jobs if j.get("source", "").lower() == src_raw and j.get("company"))
+            top_src_cos = [c for c, _ in src_companies.most_common(4)]
+            source_stats.append({
+                "source_raw": src_raw,
+                "display_name": disp_name,
+                "color": color,
+                "count": count,
+                "pct": round(count / len(jobs) * 100, 1),
+                "top_companies": top_src_cos,
+                "company_count": len(src_companies),
+            })
+
+        col_src_chart, col_src_cards = st.columns([1.1, 1.4])
+
+        with col_src_chart:
+            df_src = pd.DataFrame(source_stats)
+            fig_src = px.pie(
+                df_src,
+                values="count",
+                names="display_name",
+                hole=0.48,
+                color="display_name",
+                color_discrete_map={row["display_name"]: row["color"] for _, row in df_src.iterrows()},
+                title=f"Platform Dağılımı ({len(jobs)} İlan)",
+            )
+            fig_src.update_traces(
+                textinfo="percent+value",
+                textposition="inside",
+                hovertemplate="<b>%{label}</b><br>İlan Sayısı: %{value} (%{percent})<extra></extra>",
+            )
+            fig_src.update_layout(
+                height=380,
+                margin=dict(l=10, r=10, t=40, b=10),
+                legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5),
+            )
+            st.plotly_chart(fig_src, use_container_width=True)
+
+        with col_src_cards:
+            st.markdown("**⚡ Hızlı Kaynak & Şirket İnceleme Paneli**")
+            st.caption("Aşağıdaki kaynak veya şirket butonlarına tıklayarak doğrudan ilanları filtreleyebilirsiniz:")
+
+            for item in source_stats:
+                with st.container():
+                    c_info, c_btn = st.columns([2.2, 1.2])
+                    with c_info:
+                        st.markdown(
+                            f"**{item['display_name']}** — <span style='color:{item['color']}; font-weight:bold;'>{item['count']} İlan</span> "
+                            f"<small>({item['pct']}%) • {item['company_count']} Şirket</small>",
+                            unsafe_allow_html=True
+                        )
+                        if item["top_companies"]:
+                            co_tags = " • ".join(item["top_companies"])
+                            st.caption(f"Öne Çıkan Şirketler: *{co_tags}*")
+                    with c_btn:
+                        if st.button(
+                            f"👉 İncele ({item['count']})",
+                            key=f"tab1_src_jump_{item['source_raw']}",
+                            use_container_width=True,
+                            help=f"{item['display_name']} kaynağından gelen tüm ilanları Job Matcher'da aç"
+                        ):
+                            st.session_state["filter_source"] = item["display_name"]
+                            st.session_state["filter_company"] = "Tümü"
+                            st.toast(f"🎯 '{item['display_name']}' filtresi seçildi! Job Matcher sekmesine geçebilirsiniz.")
+                            st.rerun()
+
+                    if item["top_companies"]:
+                        co_cols = st.columns(len(item["top_companies"]))
+                        for c_idx, c_name in enumerate(item["top_companies"]):
+                            with co_cols[c_idx]:
+                                if st.button(
+                                    f"🏢 {c_name}",
+                                    key=f"tab1_co_btn_{item['source_raw']}_{c_idx}",
+                                    use_container_width=True,
+                                    help=f"{c_name} şirketinin ilanlarını aç"
+                                ):
+                                    st.session_state["filter_company"] = c_name
+                                    st.session_state["filter_source"] = "Tümü"
+                                    st.toast(f"🎯 '{c_name}' şirketi seçildi! Job Matcher sekmesine geçebilirsiniz.")
+                                    st.rerun()
+                    st.divider()
+
     # ── Category breakdown pie ─────────────────────────────────────────────────
     if jobs:
         st.markdown('<div class="section-header">📂 Jobs by Category</div>', unsafe_allow_html=True)
@@ -526,11 +630,52 @@ with tab2:
 
     co_idx = all_companies.index(current_co_session)
 
+    # 1b. Source choices & Cross-tab link support
+    SOURCE_DISPLAY_MAP = {
+        "greenhouse": "🏢 Greenhouse ATS",
+        "personio": "🎯 Personio ATS",
+        "berlinstartupjobs": "🚀 Berlin Startup Jobs",
+        "linkedin": "🔗 LinkedIn Jobs",
+        "workwise": "💼 Workwise.io",
+        "jobteaser": "🎓 JobTeaser",
+        "arbeitnow": "🇩🇪 Arbeitnow",
+        "workingstudentjobs": "📚 WorkingStudentJobs",
+        "hiringcafe": "☕ HiringCafe",
+    }
+    raw_sources = sorted(list({j.get("source", "").lower() for j in jobs if j.get("source")}))
+    source_display_names = ["Tümü"] + [SOURCE_DISPLAY_MAP.get(s, f"🌐 {s.capitalize()}") for s in raw_sources]
+    display_to_raw_source = {SOURCE_DISPLAY_MAP.get(s, f"🌐 {s.capitalize()}"): s for s in raw_sources}
+    display_to_raw_source["Tümü"] = "Tümü"
+
+    current_src_session = st.session_state.get("filter_source", "Tümü")
+    if current_src_session not in source_display_names:
+        current_src_session = "Tümü"
+        st.session_state["filter_source"] = "Tümü"
+
+    src_idx = source_display_names.index(current_src_session)
+
+    # Active filter banner
+    active_filters = []
+    if current_src_session != "Tümü":
+        active_filters.append(f"🌐 Kaynak: **{current_src_session}**")
+    if current_co_session != "Tümü":
+        active_filters.append(f"🏢 Şirket: **{current_co_session}**")
+
+    if active_filters:
+        c_banner, c_reset_banner = st.columns([4, 1.2])
+        with c_banner:
+            st.info("🎯 **Hızlı Filtre Aktif:** " + " | ".join(active_filters))
+        with c_reset_banner:
+            if st.button("❌ Filtreleri Temizle", key="btn_clear_banner_filter", use_container_width=True):
+                st.session_state["filter_source"] = "Tümü"
+                st.session_state["filter_company"] = "Tümü"
+                st.rerun()
+
     # 2. Categories
     all_categories = ["Tümü"] + sorted(list({j.get("category", "") for j in jobs if j.get("category")}))
 
-    # ── Filter Row 1: Core Search, Company, Category & Sort ───────────────────
-    col_f1, col_f2, col_f3, col_f4 = st.columns([1.5, 1.2, 1.1, 1.2])
+    # ── Filter Row 1: Core Search, Company, Source, Category & Sort ───────────
+    col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns([1.4, 1.1, 1.1, 1.0, 1.1])
     with col_f1:
         search_kw = st.text_input(
             "🔍 İlan / Anahtar Kelime Ara:",
@@ -550,9 +695,19 @@ with tab2:
             st.session_state["filter_company"] = sel_company
 
     with col_f3:
-        sel_cat = st.selectbox("📂 Kategori:", all_categories, index=0, key="matcher_sel_cat")
+        sel_source = st.selectbox(
+            "🌐 İlan Kaynağı:",
+            source_display_names,
+            index=src_idx,
+            key="matcher_sel_source",
+        )
+        if sel_source != st.session_state.get("filter_source"):
+            st.session_state["filter_source"] = sel_source
 
     with col_f4:
+        sel_cat = st.selectbox("📂 Kategori:", all_categories, index=0, key="matcher_sel_cat")
+
+    with col_f5:
         sort_by = st.selectbox(
             "🕒 Sıralama Ölçütü:",
             [
@@ -640,8 +795,10 @@ with tab2:
             st.write("")
             if st.button("🔄 Filtreleri Sıfırla", key="btn_clear_all_filters", use_container_width=True):
                 st.session_state["filter_company"] = "Tümü"
+                st.session_state["filter_source"] = "Tümü"
                 st.session_state["matcher_search_kw"] = ""
                 st.session_state["matcher_sel_company"] = "Tümü"
+                st.session_state["matcher_sel_source"] = "Tümü"
                 st.session_state["matcher_sel_cat"] = "Tümü"
                 st.session_state["matcher_sel_lang"] = "Tümü"
                 st.session_state["matcher_sel_loc"] = "Tümü"
@@ -656,6 +813,11 @@ with tab2:
     # 1. Company filter
     if sel_company != "Tümü":
         filtered_jobs_list = [j for j in filtered_jobs_list if j.get("company") == sel_company]
+
+    # 1b. Source filter
+    if sel_source != "Tümü":
+        raw_s = display_to_raw_source.get(sel_source, sel_source.lower())
+        filtered_jobs_list = [j for j in filtered_jobs_list if j.get("source", "").lower() == raw_s]
 
     # 2. Category filter
     if sel_cat != "Tümü":

@@ -1061,28 +1061,28 @@ with tab2:
                     help="Yapılan tüm düzenlemeleri ve revizyonları içeren güncel CV'yi PDF olarak indirir",
                 )
 
-            # Editable summary
-            st.markdown("#### 📝 İlana Özel Profesyonel Özet (Summary)")
-            current_summary = tailored_cv.get("summary", "")
-            edited_summary = st.text_area(
-                "Özet Metni (doğrudan düzenleyebilirsiniz):",
-                value=current_summary,
-                height=90,
-                key=f"working_summary_{selected_job.get('id')}",
-            )
-            if edited_summary != current_summary:
-                tailored_cv["summary"] = edited_summary
+            # Editable summary in collapsed expander
+            with st.expander("📝 İlana Özel Profesyonel Özet (Summary)", expanded=False):
+                current_summary = tailored_cv.get("summary", "")
+                edited_summary = st.text_area(
+                    "Özet Metni (doğrudan düzenleyebilirsiniz):",
+                    value=current_summary,
+                    height=90,
+                    key=f"working_summary_{selected_job.get('id')}",
+                )
+                if edited_summary != current_summary:
+                    tailored_cv["summary"] = edited_summary
 
             job_ctx = f"Job: {selected_job.get('title')} at {selected_job.get('company')}. Requirements: {selected_job.get('description', '')[:500]}"
 
-            # Experience section with inline editing + micro-actions
+            # Experience section in collapsed expander
             if tailored_cv.get("experience"):
-                st.markdown("#### 💼 Deneyim Maddeleri & Mikro-İyileştirmeler")
-                st.caption("Her maddeyi doğrudan metin kutusundan değiştirebilir veya altındaki yapay zeka butonlarıyla tek tıkla dönüştürebilirsiniz:")
-                for exp_idx, exp in enumerate(tailored_cv.get("experience", [])):
-                    role_label = exp.get("role", "")
-                    company_label = exp.get("company", "")
-                    with st.expander(f"💼 {role_label} — {company_label}", expanded=True):
+                with st.expander("💼 Deneyim Maddeleri & Mikro-İyileştirmeler", expanded=False):
+                    st.caption("Her maddeyi doğrudan metin kutusundan değiştirebilir veya altındaki yapay zeka butonlarıyla tek tıkla dönüştürebilirsiniz:")
+                    for exp_idx, exp in enumerate(tailored_cv.get("experience", [])):
+                        role_label = exp.get("role", "")
+                        company_label = exp.get("company", "")
+                        st.markdown(f"**💼 {role_label} — {company_label}**")
                         new_bullets = list(exp.get("bullets", []))
                         for b_idx, bullet in enumerate(new_bullets):
                             edited_bullet = st.text_area(
@@ -1123,12 +1123,12 @@ with tab2:
                                         st.rerun()
                             st.write("")
 
-            # Projects section with inline editing + micro-actions
+            # Projects section in collapsed expander
             if tailored_cv.get("projects"):
-                st.markdown("#### 🔬 Proje Maddeleri & Mikro-İyileştirmeler")
-                for p_idx, proj in enumerate(tailored_cv.get("projects", [])):
-                    proj_name = proj.get("name", "")
-                    with st.expander(f"🔬 {proj_name}", expanded=True):
+                with st.expander("🔬 Proje Maddeleri & Mikro-İyileştirmeler", expanded=False):
+                    for p_idx, proj in enumerate(tailored_cv.get("projects", [])):
+                        proj_name = proj.get("name", "")
+                        st.markdown(f"**🔬 {proj_name}**")
                         new_p_bullets = list(proj.get("bullets", []))
                         for b_idx, bullet in enumerate(new_p_bullets):
                             edited_bullet = st.text_area(

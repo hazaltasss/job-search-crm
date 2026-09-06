@@ -48,29 +48,40 @@ def main() -> None:
         logger.error("Database init failed: %s", exc)
         sys.exit(1)
 
-    # ── Step 2: Fetch ─────────────────────────────────────────────────────────
+    # ── Step 2: Fetch (Concurrent across all 4 sources) ────────────────────────
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from src.fetchers.arbeitnow import fetch_jobs as fetch_arbeitnow
+    from src.fetchers.workingstudentjobs import fetch_jobs as fetch_wsj
+    from src.fetchers.hiringcafe import fetch_jobs as fetch_hiringcafe
+    from src.fetchers.linkedin import fetch_jobs as fetch_linkedin
+
+    fetcher_tasks = {
+        "Arbeitnow": lambda: fetch_arbeitnow(max_pages=8),
+        "WorkingStudentJobs": lambda: fetch_wsj(max_pages=2),
+        "HiringCafe": lambda: fetch_hiringcafe(),
+        "LinkedIn": lambda: fetch_linkedin(),
+    }
+
     raw_jobs = []
     fetch_errors = []
+    source_counts = {}
 
-    # 2a. Arbeitnow API (Free, reliable, full descriptions)
-    try:
-        from src.fetchers.arbeitnow import fetch_jobs as fetch_arbeitnow
-        an_jobs = fetch_arbeitnow(max_pages=8)
-        raw_jobs.extend(an_jobs)
-        logger.info("Arbeitnow: %d raw jobs fetched", len(an_jobs))
-    except Exception as exc:
-        logger.error("Arbeitnow fetch failed: %s", exc)
-        fetch_errors.append(f"Arbeitnow: {exc}")
-
-    # 2b. WorkingStudentJobs.de (Berlin specific)
-    try:
-        from src.fetchers.workingstudentjobs import fetch_jobs as fetch_wsj
-        wsj_jobs = fetch_wsj(max_pages=2)
-        raw_jobs.extend(wsj_jobs)
-        logger.info("WorkingStudentJobs: %d raw jobs fetched", len(wsj_jobs))
-    except Exception as exc:
-        logger.error("WorkingStudentJobs fetch failed: %s", exc)
-        fetch_errors.append(f"WorkingStudentJobs: {exc}")
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {
+            pool.submit(fn): name
+            for name, fn in fetcher_tasks.items()
+        }
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                jobs = future.result()
+                raw_jobs.extend(jobs)
+                source_counts[name] = len(jobs)
+                logger.info("%s: %d raw jobs fetched", name, len(jobs))
+            except Exception as exc:
+                logger.error("%s fetch failed: %s", name, exc)
+                fetch_errors.append(f"{name}: {exc}")
+                source_counts[name] = 0
 
     if not raw_jobs:
         msg = "No raw jobs fetched from any source."
@@ -86,7 +97,19 @@ def main() -> None:
 
     # ── Step 4: Deduplicate ───────────────────────────────────────────────────
     from src import database
-    new_jobs = [j for j in filtered_jobs if not database.is_duplicate(j.url)]
+    seen_batch_keys = set()
+    new_jobs = []
+    for j in filtered_jobs:
+        # Check against local database
+        if database.is_duplicate(j.url, title=j.title, company=j.company):
+            continue
+        # Check within current batch
+        batch_key = (database.normalize_company(j.company), database.normalize_title(j.title))
+        if batch_key in seen_batch_keys:
+            continue
+        seen_batch_keys.add(batch_key)
+        new_jobs.append(j)
+
     logger.info(
         "Deduplication: %d matched → %d new (not seen before)",
         len(filtered_jobs), len(new_jobs),
@@ -144,13 +167,15 @@ def main() -> None:
 
     # Print summary table to console
     table = Table(title="Fetch Run Summary", show_header=True)
-    table.add_column("Metric", style="cyan")
+    table.add_column("Metric / Source", style="cyan")
     table.add_column("Count", style="bold green")
-    table.add_row("Raw jobs fetched", str(len(raw_jobs)))
+    for src_name, count in sorted(source_counts.items()):
+        table.add_row(f"  • {src_name}", str(count))
+    table.add_row("Total raw fetched", str(len(raw_jobs)))
     table.add_row("Passed filters",   str(len(filtered_jobs)))
     table.add_row("New (unique)",      str(len(new_jobs)))
     table.add_row("Notifications sent", str(sent_count))
-    table.add_row("Errors",            str(len(errors)))
+    table.add_row("Errors",            str(len(errors) + len(fetch_errors)))
     table.add_row("Elapsed",           f"{elapsed:.1f}s")
     console.print(table)
 

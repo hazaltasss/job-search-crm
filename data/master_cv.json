@@ -15,6 +15,7 @@
       "field": "Business Management (Specialization: Data Analytics & AI)",
       "institution": "Steinbeis University",
       "location": "Berlin, Germany",
+      "date_display": "July 2026 – July 2028",
       "start_date": "2026-07",
       "end_date": "2028-07",
       "gpa": "",
@@ -26,10 +27,11 @@
       "thesis": ""
     },
     {
-      "degree": "Bachelor of Science (B.Sc.)",
+      "degree": "Bachelor of Science",
       "field": "Computer Engineering (100% English Instruction)",
       "institution": "Çukurova University",
       "location": "Adana, Turkey",
+      "date_display": "Graduated: 2024",
       "start_date": "2020-09",
       "end_date": "2024-06",
       "gpa": "",
@@ -48,49 +50,53 @@
       "company": "Softtech A.Ş.",
       "location": "Ankara, Turkey",
       "type": "Internship",
+      "date_range": "June 2024 – August 2024",
       "start_date": "2024-06",
       "end_date": "2024-08",
       "is_current": false,
       "bullets": [
-        "Engineered secure, scalable RESTful backend microservices using Java and Spring Boot to support high-throughput internal data workflows.",
-        "Leveraged Postman and Swagger/OpenAPI to test, debug, and document REST endpoints and authentication flows, ensuring clean cross-platform integration.",
-        "Designed and indexed relational database schemas in MySQL, enhancing query latency and data integrity for master records.",
-        "Built responsive mobile client modules using Flutter, integrating them with backend APIs and structured JSON payloads."
+        "API & Backend Development: Engineered secure, scalable RESTful backend microservices using Java and Spring Boot to support high-throughput internal data workflows.",
+        "API Testing & Documentation: Leveraged Postman and Swagger/OpenAPI to test, debug, and document REST endpoints and authentication flows, ensuring clean cross-platform integration.",
+        "Data & Schema Optimization: Designed and indexed relational database schemas in MySQL, enhancing query latency and data integrity for master records.",
+        "Cross-Platform Integration: Built responsive mobile client modules using Flutter, integrating them with backend APIs and structured JSON payloads."
       ]
     }
   ],
   "projects": [
     {
       "name": "AI-Powered Smart Photo Memory Assistant",
-      "description": "Engineered a multimodal semantic retrieval system analyzing visual inputs via Gemini Vision API and vectorizing metadata using 3072-dimensional embeddings for low-latency cosine similarity search. Designed a hybrid search parser decomposing unstructured natural language queries into deterministic SQL filters and semantic vector searches.",
+      "technologies_header": "Python, FastAPI, SQLite (sqlite-vec), Gemini Vision & Embeddings, React, Twilio",
       "technologies": ["Python", "FastAPI", "SQLite (sqlite-vec)", "Gemini Vision & Embeddings", "React", "Twilio"],
+      "description": "Engineered a multimodal semantic retrieval system analyzing visual inputs via Gemini Vision API and vectorizing metadata using 3072-dimensional embeddings for low-latency cosine similarity search. Designed a hybrid search parser decomposing unstructured natural language queries into deterministic SQL filters and semantic vector searches.",
       "url": "",
       "bullets": [
-        "Built multimodal semantic retrieval system with Gemini Vision API and 3072-dimensional vector embeddings",
-        "Designed hybrid search parser combining SQL filters with cosine similarity vector search for low-latency queries",
-        "Integrated Twilio for real-time memory retrieval via conversational interface"
+        "Engineered a multimodal semantic retrieval system analyzing visual inputs via Gemini Vision API and vectorizing metadata using 3072-dimensional embeddings for low-latency cosine similarity search.",
+        "Designed a hybrid search parser decomposing unstructured natural language queries into deterministic SQL filters and semantic vector searches to eliminate retrieval hallucinations.",
+        "Built asynchronous API pipelines using FastAPI and worker thread pooling (run_in_threadpool) to eliminate event-loop blocking during concurrent high-volume media ingestion.",
+        "Implemented production-grade fault-tolerance mechanisms, including exponential backoff and automated retry routines to handle external API rate limits (HTTP 429/503)."
       ]
     },
     {
       "name": "Automated Job Application & Pipeline Agent",
-      "description": "Developed an autonomous end-to-end job tracking and parsing agent scraping real-time postings across European tech job boards twice daily. Integrated Gemini LLM workflows to dynamically parse job descriptions, generate tailored cover letters, and produce ATS-optimized CV drafts.",
+      "technologies_header": "Python, Gemini API, GitHub Actions, Google Sheets API, Telegram Bot",
       "technologies": ["Python", "Gemini API", "GitHub Actions", "Google Sheets API", "Telegram Bot"],
+      "description": "Developed an autonomous end-to-end job tracking and parsing agent scraping real-time postings across European tech job boards twice daily. Integrated Gemini LLM workflows to dynamically parse job descriptions, generate tailored cover letters, and produce ATS-optimized CV drafts.",
       "url": "",
       "bullets": [
-        "Scraped real-time job postings across European tech boards twice daily via GitHub Actions cron automation",
-        "Integrated Gemini LLM to generate tailored cover letters and ATS-optimized CV drafts per job description",
-        "Built interactive Telegram bot with inline action buttons and Google Sheets CRM for live status tracking"
+        "Developed an autonomous end-to-end job tracking and parsing agent scraping real-time postings across European tech job boards twice daily.",
+        "Integrated Gemini LLM workflows to dynamically parse job descriptions, generate tailored cover letters, and produce ATS-optimized CV drafts based on role criteria.",
+        "Orchestrated scheduled automated pipelines via GitHub Actions, persisting structured pipeline states and application metrics directly into live spreadsheets and Telegram alerts."
       ]
     },
     {
       "name": "AI Tandem – Conversational Language Partner",
-      "description": "Created an interactive conversational AI application designed for real-time language practice, adaptive dialogue generation, and context-aware feedback with stateful context management.",
+      "technologies_header": "Python, LLM APIs, Prompt Engineering, Speech/NLP Pipelines",
       "technologies": ["Python", "LLM APIs", "Prompt Engineering", "Speech/NLP Pipelines"],
+      "description": "Created an interactive conversational AI application designed for real-time language practice, adaptive dialogue generation, and context-aware feedback with stateful context management.",
       "url": "",
       "bullets": [
-        "Designed stateful context management system for adaptive, personalized dialogue generation",
-        "Implemented real-time language practice flows with context-aware grammar and vocabulary feedback",
-        "Applied advanced prompt engineering for consistent persona and pedagogical tone"
+        "Created an interactive conversational AI application designed for real-time language practice, adaptive dialogue generation, and context-aware feedback.",
+        "Implemented stateful context management and prompt orchestration to dynamically assess user input, correct grammatical nuances, and adjust conversational complexity."
       ]
     }
   ],

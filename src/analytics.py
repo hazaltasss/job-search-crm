@@ -55,7 +55,7 @@ def extract_top_companies(days: int = 30) -> list[tuple[str, int]]:
     """Return the most frequent hiring companies in the last N days."""
     jobs = database.get_all_jobs()
     counter: Counter = Counter(j["company"] for j in jobs if j.get("company"))
-    return counter.most_common(10)
+    return sorted(counter.items(), key=lambda x: (-x[1], x[0].lower()))[:10]
 
 
 # ─── Stats Summary ─────────────────────────────────────────────────────────────

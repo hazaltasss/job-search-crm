@@ -7,6 +7,7 @@ Scrapes working student and internship postings in Berlin.
 3. Fetches the full job description from the detail page (JSON-LD JobPosting) for matched cards.
 """
 from __future__ import annotations
+import asyncio
 import json
 import logging
 import time
@@ -55,26 +56,62 @@ def _get_page(client: httpx.Client, url: str) -> BeautifulSoup | None:
     return BeautifulSoup(resp.text, "lxml")
 
 
-def _fetch_full_description(client: httpx.Client, job_url: str) -> str:
-    """Fetch detail page and extract description from JSON-LD JobPosting."""
+def _parse_description_from_html(html: str) -> str:
+    """Extract description from JSON-LD JobPosting inside page HTML."""
     try:
-        soup = _get_page(client, job_url)
-        if not soup:
-            return ""
+        soup = BeautifulSoup(html, "lxml")
         for s in soup.find_all("script", type="application/ld+json"):
             try:
                 data = json.loads(s.string or "{}")
                 if data.get("@type") == "JobPosting":
                     desc = data.get("description", "")
                     if desc:
-                        # Strip HTML tags from description if needed
-                        clean = BeautifulSoup(desc, "lxml").get_text(separator="\n").strip()
-                        return clean
+                        return BeautifulSoup(desc, "lxml").get_text(separator="\n").strip()
             except Exception:
                 continue
     except Exception as exc:
+        logger.debug("Failed parsing description from HTML: %s", exc)
+    return ""
+
+
+def _fetch_full_description(client: httpx.Client, job_url: str) -> str:
+    """Fetch detail page and extract description from JSON-LD JobPosting."""
+    try:
+        soup = _get_page(client, job_url)
+        if not soup:
+            return ""
+        return _parse_description_from_html(str(soup))
+    except Exception as exc:
         logger.debug("Failed to fetch full description for %s: %s", job_url, exc)
     return ""
+
+
+async def _fetch_descriptions_batch(urls: list[str], max_concurrent: int = 5) -> dict[str, str]:
+    """Fetch multiple detail pages concurrently with semaphore, returning {url: description}."""
+    sem = asyncio.Semaphore(max_concurrent)
+    results: dict[str, str] = {}
+
+    async def _fetch_one(client: httpx.AsyncClient, url: str) -> None:
+        async with sem:
+            try:
+                resp = await client.get(url, headers=_HEADERS, timeout=REQUEST_TIMEOUT)
+                if resp.status_code == 200:
+                    results[url] = _parse_description_from_html(resp.text)
+                else:
+                    results[url] = ""
+            except Exception as exc:
+                logger.debug("Failed async fetch for %s: %s", url, exc)
+                results[url] = ""
+            await asyncio.sleep(0.1)  # Minimal politeness delay
+
+    if not urls:
+        return results
+
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        tasks = [_fetch_one(client, url) for url in urls]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    return results
 
 
 def _parse_card(card, now_iso: str) -> dict | None:
@@ -99,6 +136,17 @@ def _parse_card(card, now_iso: str) -> dict | None:
         else:
             img = card.find("img", alt=True)
             company = img["alt"].replace(" logo", "").strip() if img else "Unknown"
+
+        # Check for aggregator profiles or "Company: Role" title structures
+        aggregator_names = {"venture capital careers", "recruiting", "career", "jobs", "aggregator", "unknown"}
+        if ": " in title:
+            prefix, rest = title.split(": ", 1)
+            prefix = prefix.strip()
+            # If prefix looks like a company name and not a generic role descriptor
+            if 2 <= len(prefix) <= 40 and not any(kw in prefix.lower() for kw in ["working student", "werkstudent", "intern", "praktik", "thesis"]):
+                if company.lower() in aggregator_names or prefix.lower() in company.lower() or company.lower() in prefix.lower():
+                    company = prefix
+                    title = rest.strip()
 
         # Chips: language, role type, location, remote, skills
         chips = [
@@ -138,12 +186,14 @@ def _parse_card(card, now_iso: str) -> dict | None:
 def fetch_jobs(max_pages: int = 3) -> list[Job]:
     """
     Scrape WorkingStudentJobs.de for Berlin listings.
-    Fetches job details for English-friendly postings.
+    Phase 1: Collects job cards synchronously.
+    Phase 2: Concurrently fetches job descriptions via asyncio batching.
     """
-    all_jobs: list[Job] = []
+    candidate_cards: list[dict] = []
     seen_urls: set[str] = set()
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    # Phase 1: Scan listing pages
     with httpx.Client(follow_redirects=True) as client:
         for base_url in _TARGET_PAGES:
             sep = "&" if "?" in base_url else "?"
@@ -164,35 +214,40 @@ def fetch_jobs(max_pages: int = 3) -> list[Job]:
                     if not parsed or parsed["url"] in seen_urls:
                         continue
 
-                    # If the card explicitly states "German" only, skip to save network calls
+                    # If the card explicitly states "German" only, skip
                     if parsed["is_german_only"]:
                         continue
 
                     seen_urls.add(parsed["url"])
-
-                    # Fetch full description from detail page
-                    full_desc = _fetch_full_description(client, parsed["url"])
-                    if not full_desc:
-                        # Fallback to chips content
-                        full_desc = f"{parsed['title']} at {parsed['company']}. Tags: {', '.join(parsed['chips'])}"
-
-                    job = Job(
-                        job_id=_make_job_id(parsed["url"]),
-                        source="workingstudentjobs",
-                        title=parsed["title"],
-                        company=parsed["company"],
-                        location=parsed["location"],
-                        url=parsed["url"],
-                        description=full_desc,
-                        language="en" if parsed["is_english"] else "unknown",
-                        is_remote=parsed["is_remote"],
-                        is_berlin=True,
-                        fetched_at=now_iso,
-                    )
-                    all_jobs.append(job)
-                    time.sleep(0.3)  # Be polite to the server
+                    candidate_cards.append(parsed)
 
                 time.sleep(REQUEST_DELAY)
+
+    # Phase 2: Fetch full descriptions concurrently with asyncio
+    urls_to_fetch = [c["url"] for c in candidate_cards]
+    logger.info("WSJ: Concurrently fetching descriptions for %d jobs...", len(urls_to_fetch))
+    descriptions_map = asyncio.run(_fetch_descriptions_batch(urls_to_fetch, max_concurrent=5))
+
+    all_jobs: list[Job] = []
+    for parsed in candidate_cards:
+        full_desc = descriptions_map.get(parsed["url"], "")
+        if not full_desc:
+            full_desc = f"{parsed['title']} at {parsed['company']}. Tags: {', '.join(parsed['chips'])}"
+
+        job = Job(
+            job_id=_make_job_id(parsed["url"]),
+            source="workingstudentjobs",
+            title=parsed["title"],
+            company=parsed["company"],
+            location=parsed["location"],
+            url=parsed["url"],
+            description=full_desc,
+            language="en" if parsed["is_english"] else "unknown",
+            is_remote=parsed["is_remote"],
+            is_berlin=True,
+            fetched_at=now_iso,
+        )
+        all_jobs.append(job)
 
     logger.info("WorkingStudentJobs: %d relevant jobs fetched", len(all_jobs))
     return all_jobs

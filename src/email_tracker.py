@@ -92,9 +92,11 @@ def _extract_body(msg: email.message.Message) -> str:
 
 
 def classify_email_with_gemini(sender: str, subject: str, date: str, body: str) -> dict:
-    """Send email snippet to Gemini 1.5 Flash for classification."""
+    """Send email snippet to Gemini for classification."""
     if not GEMINI_API_KEY:
         raise EnvironmentError("GEMINI_API_KEY is not set.")
+
+    from src.ai_assistant import extract_json_from_text
 
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel("gemini-3.6-flash")
@@ -106,15 +108,21 @@ def classify_email_with_gemini(sender: str, subject: str, date: str, body: str) 
         body=body[:2000] if body else "(No text content)",
     )
 
-    response = model.generate_content(prompt)
-    raw = response.text.strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```[a-z]*\n?", "", raw)
-        raw = re.sub(r"\n?```$", "", raw)
+    try:
+        config = genai.types.GenerationConfig(
+            temperature=0.1,
+            max_output_tokens=1024,
+            response_mime_type="application/json",
+        )
+        response = model.generate_content(prompt, generation_config=config)
+    except Exception:
+        response = model.generate_content(prompt)
+
+    raw = response.text.strip() if (response and response.text) else ""
 
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
+        return extract_json_from_text(raw)
+    except Exception:
         logger.warning("Failed to parse Gemini classification JSON: %s", raw)
         return {
             "is_job_related": False,

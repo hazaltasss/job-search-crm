@@ -1206,6 +1206,31 @@ with tab2:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
 
+            # Quick download buttons right below chat
+            st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+            col_chat_dl1, col_chat_dl2, col_chat_pad = st.columns([1.6, 1.6, 3])
+            with col_chat_dl1:
+                st.download_button(
+                    label="📥 Güncel CV İndir (.pdf)",
+                    data=pdf_bytes,
+                    file_name=f"{safe_candidate}_CV_{safe_co}.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                    key=f"chat_dl_pdf_{selected_job.get('id')}",
+                    use_container_width=True,
+                    help="Copilot ile yapılan tüm düzenlemeleri içeren güncel CV'yi PDF olarak indirir",
+                )
+            with col_chat_dl2:
+                st.download_button(
+                    label="📄 Güncel Word İndir (.docx)",
+                    data=docx_bytes,
+                    file_name=f"{safe_candidate}_CV_{safe_co}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key=f"chat_dl_docx_{selected_job.get('id')}",
+                    use_container_width=True,
+                    help="Copilot ile yapılan tüm düzenlemeleri içeren güncel CV'yi Word belgesi olarak indirir",
+                )
+
             if copilot_prompt := st.chat_input("CV'nizde neyi değiştirmek istersiniz?"):
                 chat_history.append({"role": "user", "content": copilot_prompt})
                 st.session_state["cv_copilot_messages"] = chat_history

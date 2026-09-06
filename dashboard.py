@@ -156,6 +156,48 @@ st.markdown("""
         font-size: 13px;
         display: inline-block;
     }
+    /* Modern Stateful Segmented Navigation Tabs */
+    div[data-testid="stRadio"]:has(div[role="radiogroup"]) {
+        margin-bottom: 18px;
+    }
+    div[data-testid="stRadio"] > div[role="radiogroup"] {
+        display: flex !important;
+        flex-direction: row !important;
+        background: #f1f5f9;
+        padding: 6px;
+        border-radius: 12px;
+        border: 1px solid #cbd5e1;
+        gap: 8px;
+    }
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label {
+        flex: 1;
+        text-align: center;
+        background: transparent;
+        padding: 10px 16px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 15px;
+        color: #475569;
+        cursor: pointer;
+        transition: all 0.2s ease-in-out;
+        justify-content: center;
+        display: flex;
+    }
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label:hover {
+        background: rgba(255, 255, 255, 0.7);
+        color: #0f172a;
+    }
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label[data-checked="true"],
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) {
+        background: #ffffff !important;
+        color: #1e40af !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        border: 1px solid #e2e8f0;
+    }
+    /* Hide native radio circle icon */
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
+        display: none !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -383,18 +425,36 @@ c6.metric("📈 Başvuru Oranı", app_rate)
 
 st.divider()
 
-# ─── Tabs ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs([
+# ─── Stateful Navigation Tabs ──────────────────────────────────────────────────
+NAV_OPTIONS = [
     "📊 Market Intelligence",
     "🎯 Job Matcher & AI Optimizer",
     "📬 Başvuru Takip & E-posta Hub",
-])
+]
 
+if "main_nav_tab" not in st.session_state:
+    st.session_state["main_nav_tab"] = NAV_OPTIONS[0]
+
+if st.session_state["main_nav_tab"] not in NAV_OPTIONS:
+    st.session_state["main_nav_tab"] = NAV_OPTIONS[0]
+
+active_tab = st.radio(
+    "Ana Navigasyon",
+    NAV_OPTIONS,
+    index=NAV_OPTIONS.index(st.session_state["main_nav_tab"]),
+    horizontal=True,
+    label_visibility="collapsed",
+    key="nav_radio_bar",
+)
+
+# Sync if user clicked manually
+if active_tab != st.session_state["main_nav_tab"]:
+    st.session_state["main_nav_tab"] = active_tab
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — MARKET INTELLIGENCE
 # ══════════════════════════════════════════════════════════════════════════════
-with tab1:
+if active_tab == "📊 Market Intelligence":
     st.markdown('<div class="section-header">🔥 Top In-Demand Skills — Berlin Tech Market</div>',
                 unsafe_allow_html=True)
     st.caption("Analyzes all scraped job descriptions to surface what the market is actually asking for.")
@@ -482,7 +542,10 @@ with tab1:
             with quick_cols[idx]:
                 if st.button(f"🏢 {co_name} ({co_cnt})", key=f"tab1_link_co_{idx}", use_container_width=True):
                     st.session_state["filter_company"] = co_name
-                    st.toast(f"🎯 '{co_name}' filtresi seçildi! Yukarıdan 'Job Matcher & AI Optimizer' sekmesine geçebilirsiniz.")
+                    st.session_state["filter_source"] = "Tümü"
+                    st.session_state["main_nav_tab"] = "🎯 Job Matcher & AI Optimizer"
+                    st.session_state["nav_radio_bar"] = "🎯 Job Matcher & AI Optimizer"
+                    st.toast(f"🎯 '{co_name}' filtresiyle Job Matcher'a geçildi!")
                     st.rerun()
 
     # ── Source & Platform Intelligence Dashboard ──────────────────────────────
@@ -570,7 +633,9 @@ with tab1:
                         ):
                             st.session_state["filter_source"] = item["display_name"]
                             st.session_state["filter_company"] = "Tümü"
-                            st.toast(f"🎯 '{item['display_name']}' filtresi seçildi! Job Matcher sekmesine geçebilirsiniz.")
+                            st.session_state["main_nav_tab"] = "🎯 Job Matcher & AI Optimizer"
+                            st.session_state["nav_radio_bar"] = "🎯 Job Matcher & AI Optimizer"
+                            st.toast(f"🎯 '{item['display_name']}' filtresiyle Job Matcher'a geçildi!")
                             st.rerun()
 
                     if item["top_companies"]:
@@ -585,7 +650,9 @@ with tab1:
                                 ):
                                     st.session_state["filter_company"] = c_name
                                     st.session_state["filter_source"] = "Tümü"
-                                    st.toast(f"🎯 '{c_name}' şirketi seçildi! Job Matcher sekmesine geçebilirsiniz.")
+                                    st.session_state["main_nav_tab"] = "🎯 Job Matcher & AI Optimizer"
+                                    st.session_state["nav_radio_bar"] = "🎯 Job Matcher & AI Optimizer"
+                                    st.toast(f"🎯 '{c_name}' şirketi seçildi, Job Matcher'a geçildi!")
                                     st.rerun()
                     st.divider()
 
@@ -606,7 +673,7 @@ with tab1:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — JOB MATCHER & AI OPTIMIZER
 # ══════════════════════════════════════════════════════════════════════════════
-with tab2:
+elif active_tab == "🎯 Job Matcher & AI Optimizer":
     cv = load_cv()
 
     if not jobs:
@@ -1473,7 +1540,7 @@ with tab2:
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — BAŞVURU TAKİP & E-POSTA HUB (FOLLOW-UP & GMAIL SYNC)
 # ══════════════════════════════════════════════════════════════════════════════
-with tab3:
+elif active_tab == "📬 Başvuru Takip & E-posta Hub":
     st.markdown('<div class="section-header">📬 Başvuru Takip & E-posta Takipçisi (Follow-up & CRM)</div>', unsafe_allow_html=True)
     st.caption("Başvurduğunuz pozisyonların durumlarını yönetin, 7 günü geçenlere otomatik follow-up maili oluşturun ve Gmail gelen kutunuzu yapay zeka ile takip edin.")
 

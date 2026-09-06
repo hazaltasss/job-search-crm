@@ -358,27 +358,44 @@ DEFAULT_PROFILE_ID = "default_hazal"
 def ensure_default_profile(cv_data: dict | None = None) -> str:
     """
     Ensure the default Hazal Taş profile exists in the database.
-    If missing, populates it from data/master_cv.json or the provided cv_data.
+    If missing or empty, populates it from data/master_cv.json or the provided cv_data.
     """
     with _connection() as conn:
-        row = conn.execute("SELECT id FROM profiles WHERE id = ?", (DEFAULT_PROFILE_ID,)).fetchone()
+        row = conn.execute("SELECT id, data_json FROM profiles WHERE id = ?", (DEFAULT_PROFILE_ID,)).fetchone()
+        master_cv = None
+        if MASTER_CV_PATH.exists():
+            try:
+                with open(MASTER_CV_PATH, "r", encoding="utf-8") as f:
+                    master_cv = json.load(f)
+            except Exception:
+                master_cv = None
+
         if not row:
-            if cv_data is None:
-                if MASTER_CV_PATH.exists():
-                    with open(MASTER_CV_PATH, "r", encoding="utf-8") as f:
-                        cv_data = json.load(f)
-                else:
-                    cv_data = {}
-            name = cv_data.get("personal", {}).get("name", "Hazal Taş")
+            data_to_save = cv_data if cv_data is not None else (master_cv or {})
+            name = data_to_save.get("personal", {}).get("name", "Hazal Taş")
             headline = "M.Sc. Data Analytics & AI | Computer Engineer"
             conn.execute(
                 """
                 INSERT INTO profiles (id, name, headline, data_json, is_active)
                 VALUES (?, ?, ?, ?, 1)
                 """,
-                (DEFAULT_PROFILE_ID, name, headline, json.dumps(cv_data, ensure_ascii=False)),
+                (DEFAULT_PROFILE_ID, name, headline, json.dumps(data_to_save, ensure_ascii=False)),
             )
             logger.info("Created default profile: %s", DEFAULT_PROFILE_ID)
+        elif cv_data is not None:
+            name = cv_data.get("personal", {}).get("name", "Hazal Taş")
+            headline = "M.Sc. Data Analytics & AI | Computer Engineer"
+            conn.execute(
+                "UPDATE profiles SET name = ?, headline = ?, data_json = ? WHERE id = ?",
+                (name, headline, json.dumps(cv_data, ensure_ascii=False), DEFAULT_PROFILE_ID),
+            )
+        elif master_cv and len(row["data_json"]) < 300:
+            name = master_cv.get("personal", {}).get("name", "Hazal Taş")
+            headline = "M.Sc. Data Analytics & AI | Computer Engineer"
+            conn.execute(
+                "UPDATE profiles SET name = ?, headline = ?, data_json = ? WHERE id = ?",
+                (name, headline, json.dumps(master_cv, ensure_ascii=False), DEFAULT_PROFILE_ID),
+            )
     return DEFAULT_PROFILE_ID
 
 

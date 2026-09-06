@@ -9,7 +9,9 @@ from src.database import (
     delete_profile,
 )
 
-def test_profile_lifecycle():
+def test_profile_lifecycle(tmp_path, monkeypatch):
+    test_db = tmp_path / "test_jobs.db"
+    monkeypatch.setattr("src.database.DB_PATH", test_db)
     init_db()
     mock_cv = {
         "personal": {"name": "Hazal Taş", "email": "hazal@test.com"},

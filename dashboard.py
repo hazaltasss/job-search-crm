@@ -38,13 +38,14 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
+import re
 
 # ─── Page config (must be first Streamlit call) ───────────────────────────────
 st.set_page_config(
     page_title="Job Search CRM Dashboard",
     page_icon="🤖",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ─── Custom CSS ───────────────────────────────────────────────────────────────
@@ -161,39 +162,180 @@ st.markdown("""
 
 # ─── Data loading helpers ─────────────────────────────────────────────────────
 
-@st.cache_resource
+import importlib
+from src import database as db
+importlib.reload(db)
+db.init_db()
+db.ensure_default_profile()
+
+
 def _load_db_module():
-    """Load DB module once."""
-    from src import database
-    database.init_db()
-    return database
+    """Return database module directly."""
+    return db
 
 
 @st.cache_data(ttl=5)
 def load_jobs() -> list[dict]:
-    db = _load_db_module()
     return db.get_all_jobs()
 
 
 @st.cache_data(ttl=5)
 def load_stats() -> dict:
-    db = _load_db_module()
     return db.get_stats()
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=5)
+def load_applied_jobs() -> list[dict]:
+    return db.get_applied_jobs()
+
+
+@st.cache_data(ttl=5)
 def load_cv() -> dict:
+    active_profile = db.get_active_profile()
+    if active_profile and active_profile.get("data"):
+        return active_profile["data"]
     cv_path = ROOT / "data" / "master_cv.json"
-    if not cv_path.exists():
-        return {}
-    with open(cv_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    if cv_path.exists():
+        with open(cv_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
 
 @st.cache_data(ttl=300)
 def compute_skill_frequencies(descriptions: list[str], total: int) -> list[dict]:
     from src.match_analyzer import skill_frequency_from_db
     return skill_frequency_from_db(descriptions, total)
+
+
+# ─── Sidebar Multi-Profile Management ─────────────────────────────────────────
+def render_sidebar_profiles():
+    with st.sidebar:
+        st.markdown("### 👤 Aday Profili & CV Yönetimi")
+        st.caption("Farklı CV'ler yükleyerek sistemi başka adaylar için de kullanabilirsiniz.")
+
+        profiles = db.get_profiles()
+        active_p = db.get_active_profile()
+        active_id = active_p["id"] if active_p else "default_hazal"
+
+        prof_options = [p["id"] for p in profiles]
+        if active_id not in prof_options and prof_options:
+            active_id = prof_options[0]
+
+        prof_idx = prof_options.index(active_id) if active_id in prof_options else 0
+
+        def _format_prof(pid):
+            matching = [p for p in profiles if p["id"] == pid]
+            if matching:
+                p = matching[0]
+                badge = " 🌟" if pid == "default_hazal" else ""
+                hl = p.get("headline") or ""
+                hl_short = f" — {hl[:22]}..." if len(hl) > 22 else (f" — {hl}" if hl else "")
+                return f"{p['name']}{hl_short}{badge}"
+            return pid
+
+        selected_pid = st.selectbox(
+            "Aktif Aday Profili:",
+            prof_options,
+            index=prof_idx,
+            format_func=_format_prof,
+            key="sidebar_active_profile_select",
+        )
+
+        if selected_pid != active_id:
+            db.set_active_profile(selected_pid)
+            st.cache_data.clear()
+            st.session_state.pop("tailored_cv_working", None)
+            st.session_state.pop("tailored_cv_job_id", None)
+            st.session_state.pop("cv_opt_meta", None)
+            st.session_state.pop("cv_copilot_messages", None)
+            st.rerun()
+
+        if active_p:
+            cand_skills = active_p.get("data", {}).get("skills", {})
+            total_skills_count = sum(len(v) for v in cand_skills.values() if isinstance(v, list)) if isinstance(cand_skills, dict) else 0
+            st.info(f"**Aktif Aday:** {active_p['name']}\n\n🎓 {active_p.get('headline', '')}\n\n🛠️ {total_skills_count} Kayıtlı Beceri")
+
+            if active_id != "default_hazal":
+                if st.button("🗑️ Bu Profili Sil", type="secondary", use_container_width=True, help="Bu adayın profilini sistemden kaldırır"):
+                    db.delete_profile(active_id)
+                    db.set_active_profile("default_hazal")
+                    st.cache_data.clear()
+                    st.session_state.pop("tailored_cv_working", None)
+                    st.session_state.pop("tailored_cv_job_id", None)
+                    st.session_state.pop("cv_opt_meta", None)
+                    st.session_state.pop("cv_copilot_messages", None)
+                    st.success("Profil silindi, varsayılan profile dönüldü.")
+                    st.rerun()
+
+        st.divider()
+
+        with st.expander("➕ Yeni CV Yükle & Profil Oluştur", expanded=False):
+            st.caption("PDF veya Word (.docx) formatındaki CV'nizi yükleyin. Gemini AI tüm bilgileri, becerileri ve deneyimleri otomatik ayrıştırıp sisteme ekler.")
+            uploaded_cv = st.file_uploader("CV Dosyası Seç:", type=["pdf", "docx"], key="sidebar_cv_file_uploader")
+
+            if uploaded_cv is not None:
+                if st.button("🚀 CV'yi Gemini ile Ayrıştır", type="primary", use_container_width=True, key="btn_parse_cv_upload"):
+                    with st.spinner("📄 CV metni okunuyor ve Gemini analiz ediyor… (10–20 sn)"):
+                        try:
+                            from src.cv_parser import extract_text_from_upload, parse_cv_with_gemini
+                            file_bytes = uploaded_cv.getvalue()
+                            raw_text = extract_text_from_upload(file_bytes, uploaded_cv.name)
+                            if not raw_text.strip():
+                                st.error("⚠️ Dosyadan metin okunamadı. Lütfen metin içeren bir PDF/Word dosyası yükleyin.")
+                            else:
+                                parsed = parse_cv_with_gemini(raw_text)
+                                st.session_state["pending_profile_cv"] = parsed
+                                st.success("✅ CV başarıyla analiz edildi! Bilgileri kontrol edip kaydedebilirsiniz.")
+                        except Exception as parse_err:
+                            st.error(f"Ayrıştırma hatası: {parse_err}")
+
+            if "pending_profile_cv" in st.session_state:
+                pending = st.session_state["pending_profile_cv"]
+                p_name = pending.get("personal", {}).get("name", "Yeni Aday")
+                p_edu = pending.get("education", [{}])[0].get("degree", "Data / Software") if pending.get("education") else "Professional"
+                default_slug = re.sub(r"[^a-zA-Z0-9_]", "_", p_name.lower().strip()) or "candidate"
+
+                st.markdown("---")
+                st.markdown("##### 📋 Profil Önizleme & Onay")
+                input_name = st.text_input("Ad Soyad:", value=p_name, key="new_prof_name")
+                input_headline = st.text_input("Başlık / Ünvan:", value=p_edu, key="new_prof_headline")
+                input_slug = st.text_input("Profil Kimliği (ID):", value=default_slug, key="new_prof_id")
+
+                st.caption(f"💼 Deneyim: {len(pending.get('experience', []))} | 🔬 Proje: {len(pending.get('projects', []))}")
+                skills_preview = []
+                for k, v in pending.get("skills", {}).items():
+                    if isinstance(v, list):
+                        skills_preview.extend(v[:3])
+                if skills_preview:
+                    st.caption(f"🛠️ Beceriler: {', '.join(skills_preview[:6])}...")
+
+                col_save, col_cancel = st.columns(2)
+                with col_save:
+                    if st.button("✅ Kaydet & Aktif Et", type="primary", use_container_width=True, key="btn_save_pending_profile"):
+                        pending["personal"]["name"] = input_name
+                        db.save_profile(
+                            name=input_name.strip(),
+                            headline=input_headline.strip(),
+                            data=pending,
+                            profile_id=input_slug.strip(),
+                        )
+                        db.set_active_profile(input_slug.strip())
+                        del st.session_state["pending_profile_cv"]
+                        st.cache_data.clear()
+                        st.session_state.pop("tailored_cv_working", None)
+                        st.session_state.pop("tailored_cv_job_id", None)
+                        st.session_state.pop("cv_opt_meta", None)
+                        st.session_state.pop("cv_copilot_messages", None)
+                        st.success(f"🎉 {input_name} profili kaydedildi ve aktif hale getirildi!")
+                        st.rerun()
+                with col_cancel:
+                    if st.button("❌ İptal", use_container_width=True, key="btn_cancel_pending_profile"):
+                        del st.session_state["pending_profile_cv"]
+                        st.rerun()
+
+
+# Render sidebar
+render_sidebar_profiles()
 
 
 # ─── Header ──────────────────────────────────────────────────────────────────
@@ -302,9 +444,15 @@ with tab1:
     if jobs:
         from collections import Counter
         company_counts = Counter(j["company"] for j in jobs if j.get("company"))
-        top_companies  = company_counts.most_common(10)
+        
+        # Sort deterministically: count descending, then company name ascending
+        sorted_companies = sorted(company_counts.items(), key=lambda x: (-x[1], x[0].lower()))
+        top_companies = sorted_companies[:10]
 
         df_companies = pd.DataFrame(top_companies, columns=["Company", "Open Listings"])
+        # In Plotly horizontal bar chart, categoryarray must be reversed to place the top row at the top
+        ordered_categories = df_companies["Company"].iloc[::-1].tolist()
+
         fig_co = px.bar(
             df_companies,
             x="Open Listings",
@@ -316,7 +464,7 @@ with tab1:
         )
         fig_co.update_traces(textposition="outside")
         fig_co.update_layout(
-            yaxis={"categoryorder": "total ascending"},
+            yaxis={"categoryorder": "array", "categoryarray": ordered_categories},
             coloraxis_showscale=False,
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
@@ -325,6 +473,17 @@ with tab1:
             font=dict(size=13),
         )
         st.plotly_chart(fig_co, use_container_width=True)
+        st.caption(f"ℹ️ Veritabanında **{len(company_counts)}** farklı şirket kayıtlıdır. Birden fazla pozisyon açan veya en aktif firmalar listelenmektedir.")
+
+        # Quick company navigation buttons to link with Tab 2
+        st.markdown("**🔗 Şirkete Göre Hızlı İncele (Job Matcher'da Aç):**")
+        quick_cols = st.columns(min(len(top_companies), 5))
+        for idx, (co_name, co_cnt) in enumerate(top_companies[:5]):
+            with quick_cols[idx]:
+                if st.button(f"🏢 {co_name} ({co_cnt})", key=f"tab1_link_co_{idx}", use_container_width=True):
+                    st.session_state["filter_company"] = co_name
+                    st.toast(f"🎯 '{co_name}' filtresi seçildi! Yukarıdan 'Job Matcher & AI Optimizer' sekmesine geçebilirsiniz.")
+                    st.rerun()
 
     # ── Category breakdown pie ─────────────────────────────────────────────────
     if jobs:
@@ -354,28 +513,155 @@ with tab2:
         st.warning("⚠️ `data/master_cv.json` not found. Please fill in your CV profile first.")
         st.stop()
 
-    # ── Job selector ───────────────────────────────────────────────────────────
-    st.markdown('<div class="section-header">📋 İlan Seçimi & Eşleşme Analizi</div>',
+    # ── Job selector & Advanced Filters ────────────────────────────────────────
+    st.markdown('<div class="section-header">📋 İlan Seçimi & Akıllı Filtreler</div>',
                 unsafe_allow_html=True)
 
-    # Filter, Search & Sort row
-    col_f1, col_f2, col_f3 = st.columns([1, 1.4, 1.2])
-    categories = ["Tümü"] + sorted(list({j.get("category", "") for j in jobs if j.get("category")}))
-    with col_f1:
-        sel_cat = st.selectbox("Kategori Filtresi:", categories, index=0)
-    with col_f2:
-        search_kw = st.text_input("🔍 İlan Ara:", placeholder="örn. AI, Data, Python, SAP, Bain...").strip().lower()
-    with col_f3:
-        sort_by = st.selectbox("Sıralama Ölçütü:", [
-            "🕒 En Yeni İlanlar",
-            "⏳ En Eski İlanlar",
-            "⭐ En Yüksek Uyum Skoru",
-            "📉 En Düşük Uyum Skoru",
-        ], index=0)
+    # 1. Company choices & Cross-tab link support
+    all_companies = ["Tümü"] + sorted(list({j.get("company", "") for j in jobs if j.get("company")}))
+    current_co_session = st.session_state.get("filter_company", "Tümü")
+    if current_co_session not in all_companies:
+        current_co_session = "Tümü"
+        st.session_state["filter_company"] = "Tümü"
 
+    co_idx = all_companies.index(current_co_session)
+
+    # 2. Categories
+    all_categories = ["Tümü"] + sorted(list({j.get("category", "") for j in jobs if j.get("category")}))
+
+    # ── Filter Row 1: Core Search, Company, Category & Sort ───────────────────
+    col_f1, col_f2, col_f3, col_f4 = st.columns([1.5, 1.2, 1.1, 1.2])
+    with col_f1:
+        search_kw = st.text_input(
+            "🔍 İlan / Anahtar Kelime Ara:",
+            value=st.session_state.get("matcher_search_kw", ""),
+            placeholder="örn. Python, AI, Computer Vision, SAP, Bain...",
+            key="matcher_search_kw",
+        ).strip().lower()
+
+    with col_f2:
+        sel_company = st.selectbox(
+            "🏢 Şirket:",
+            all_companies,
+            index=co_idx,
+            key="matcher_sel_company",
+        )
+        if sel_company != st.session_state.get("filter_company"):
+            st.session_state["filter_company"] = sel_company
+
+    with col_f3:
+        sel_cat = st.selectbox("📂 Kategori:", all_categories, index=0, key="matcher_sel_cat")
+
+    with col_f4:
+        sort_by = st.selectbox(
+            "🕒 Sıralama Ölçütü:",
+            [
+                "🕒 En Yeni İlanlar",
+                "⏳ En Eski İlanlar",
+                "⭐ En Yüksek Uyum Skoru",
+                "📉 En Düşük Uyum Skoru",
+            ],
+            index=0,
+            key="matcher_sort_by",
+        )
+
+    # ── Filter Row 2: Advanced Criteria (Language, Location, Role, Status, Min Score) ──
+    with st.expander("🎛️ Gelişmiş Filtreler (Programlama Dili, Lokasyon, Pozisyon Türü, Min. Skor)", expanded=False):
+        col_a1, col_a2, col_a3, col_a4 = st.columns([1.2, 1.2, 1.2, 1.3])
+
+        LANG_OPTIONS = [
+            "Tümü",
+            "Python",
+            "SQL",
+            "R",
+            "TypeScript",
+            "JavaScript",
+            "C++",
+            "C#",
+            "Go",
+            "Rust",
+            "Java",
+            "Bash",
+            "Flutter / Dart",
+        ]
+        with col_a1:
+            sel_lang = st.selectbox("💻 Programlama Dili:", LANG_OPTIONS, index=0, key="matcher_sel_lang")
+
+        with col_a2:
+            sel_loc = st.selectbox(
+                "📍 Lokasyon / Model:",
+                [
+                    "Tümü",
+                    "🏢 Berlin (Onsite/Hybrid)",
+                    "🌐 Remote (Germany-wide)",
+                    "🔄 Hibrit / Remote İmkanı",
+                ],
+                index=0,
+                key="matcher_sel_loc",
+            )
+
+        with col_a3:
+            sel_role = st.selectbox(
+                "🎓 Pozisyon Türü:",
+                [
+                    "Tümü",
+                    "💼 Working Student (Werkstudent)",
+                    "🔬 Internship (Praktikum / Thesis)",
+                ],
+                index=0,
+                key="matcher_sel_role",
+            )
+
+        with col_a4:
+            sel_status = st.selectbox(
+                "📬 Başvuru Durumu:",
+                [
+                    "Tümü",
+                    "🆕 Henüz İncelenmedi (New)",
+                    "⏳ Kaydedilenler (Saved)",
+                    "✅ Başvurulanlar (Applied/Interview)",
+                ],
+                index=0,
+                key="matcher_sel_status",
+            )
+
+        col_slider, col_btn_reset = st.columns([3.5, 1])
+        with col_slider:
+            min_score = st.slider(
+                "🎯 Minimum CV Uyum Skoru (%):",
+                min_value=0,
+                max_value=90,
+                value=0,
+                step=5,
+                key="matcher_min_score",
+            )
+        with col_btn_reset:
+            st.write("")
+            st.write("")
+            if st.button("🔄 Filtreleri Sıfırla", key="btn_clear_all_filters", use_container_width=True):
+                st.session_state["filter_company"] = "Tümü"
+                st.session_state["matcher_search_kw"] = ""
+                st.session_state["matcher_sel_company"] = "Tümü"
+                st.session_state["matcher_sel_cat"] = "Tümü"
+                st.session_state["matcher_sel_lang"] = "Tümü"
+                st.session_state["matcher_sel_loc"] = "Tümü"
+                st.session_state["matcher_sel_role"] = "Tümü"
+                st.session_state["matcher_sel_status"] = "Tümü"
+                st.session_state["matcher_min_score"] = 0
+                st.rerun()
+
+    # ── Apply All Filters Sequentially ─────────────────────────────────────────
     filtered_jobs_list = list(jobs)
+
+    # 1. Company filter
+    if sel_company != "Tümü":
+        filtered_jobs_list = [j for j in filtered_jobs_list if j.get("company") == sel_company]
+
+    # 2. Category filter
     if sel_cat != "Tümü":
         filtered_jobs_list = [j for j in filtered_jobs_list if j.get("category") == sel_cat]
+
+    # 3. Free text search
     if search_kw:
         filtered_jobs_list = [
             j for j in filtered_jobs_list
@@ -384,7 +670,71 @@ with tab2:
             or search_kw in (j.get("description", "") or "").lower()
         ]
 
-    # Apply sorting
+    # 4. Programming language filter
+    if sel_lang != "Tümü":
+        lang_regex_map = {
+            "Python": r"\bpython\b",
+            "SQL": r"\bsql\b",
+            "R": r"\b(r\s+studio|r-project|r\s+language|r\s+programming|\br\b(?!\s*&\s*d))\b",
+            "TypeScript": r"\b(typescript|ts)\b",
+            "JavaScript": r"\b(javascript|js)\b",
+            "C++": r"\bc\+\+\b",
+            "C#": r"\bc#\b",
+            "Go": r"\b(go|golang)\b",
+            "Rust": r"\brust\b",
+            "Java": r"\bjava\b",
+            "Bash": r"\b(bash|shell)\b",
+            "Flutter / Dart": r"\b(flutter|dart)\b",
+        }
+        pat_str = lang_regex_map.get(sel_lang, rf"\b{re.escape(sel_lang.lower())}\b")
+        pat = re.compile(pat_str, re.IGNORECASE)
+        filtered_jobs_list = [
+            j for j in filtered_jobs_list
+            if pat.search(f"{j.get('title', '')} {j.get('description', '')}")
+        ]
+
+    # 5. Location / Work mode filter
+    if sel_loc == "🏢 Berlin (Onsite/Hybrid)":
+        filtered_jobs_list = [
+            j for j in filtered_jobs_list
+            if j.get("is_berlin") or "berlin" in j.get("location", "").lower()
+        ]
+    elif sel_loc == "🌐 Remote (Germany-wide)":
+        filtered_jobs_list = [
+            j for j in filtered_jobs_list
+            if j.get("is_remote") or "remote" in j.get("location", "").lower()
+        ]
+    elif sel_loc == "🔄 Hibrit / Remote İmkanı":
+        filtered_jobs_list = [
+            j for j in filtered_jobs_list
+            if j.get("is_remote") or any(kw in (f"{j.get('location', '')} {j.get('description', '')}").lower() for kw in ["hybrid", "remote", "home office", "homeoffice"])
+        ]
+
+    # 6. Role type filter
+    if sel_role == "💼 Working Student (Werkstudent)":
+        filtered_jobs_list = [
+            j for j in filtered_jobs_list
+            if any(kw in f"{j.get('title', '')} {j.get('description', '')}".lower() for kw in ["working student", "werkstudent", "student assistant", "werkstudentin", "werkstudent:in"])
+        ]
+    elif sel_role == "🔬 Internship (Praktikum / Thesis)":
+        filtered_jobs_list = [
+            j for j in filtered_jobs_list
+            if any(kw in f"{j.get('title', '')} {j.get('description', '')}".lower() for kw in ["intern", "internship", "praktik", "praktikant", "praktikum", "thesis", "master thesis"])
+        ]
+
+    # 7. Status filter
+    if sel_status == "🆕 Henüz İncelenmedi (New)":
+        filtered_jobs_list = [j for j in filtered_jobs_list if j.get("status", "new") == "new"]
+    elif sel_status == "⏳ Kaydedilenler (Saved)":
+        filtered_jobs_list = [j for j in filtered_jobs_list if j.get("status") == "saved"]
+    elif sel_status == "✅ Başvurulanlar (Applied/Interview)":
+        filtered_jobs_list = [j for j in filtered_jobs_list if j.get("status") in ("applied", "interview", "assessment")]
+
+    # 8. Minimum Match Score filter
+    if min_score > 0:
+        filtered_jobs_list = [j for j in filtered_jobs_list if j.get("match_score", 0) >= min_score]
+
+    # ── Apply Sorting ──────────────────────────────────────────────────────────
     if sort_by == "🕒 En Yeni İlanlar":
         filtered_jobs_list.sort(key=lambda j: (j.get("posted_at") or j.get("fetched_at") or "", j.get("id", 0)), reverse=True)
     elif sort_by == "⏳ En Eski İlanlar":
@@ -394,10 +744,44 @@ with tab2:
     elif sort_by == "📉 En Düşük Uyum Skoru":
         filtered_jobs_list.sort(key=lambda j: j.get("match_score", 0), reverse=False)
 
-    st.markdown(f"🎯 **Toplam {len(filtered_jobs_list)} uygun ilan listeleniyor** (İncelemek istediğin ilanı aşağıdan seçebilirsin):")
+    # ── Active Filter Summary & Counter ───────────────────────────────────────
+    active_filters = []
+    if sel_company != "Tümü":
+        active_filters.append(f"🏢 **Şirket:** {sel_company}")
+    if sel_cat != "Tümü":
+        active_filters.append(f"📂 **Kategori:** {sel_cat}")
+    if sel_lang != "Tümü":
+        active_filters.append(f"💻 **Dil:** {sel_lang}")
+    if sel_loc != "Tümü":
+        active_filters.append(f"📍 **Lokasyon:** {sel_loc}")
+    if sel_role != "Tümü":
+        active_filters.append(f"🎓 **Tür:** {sel_role}")
+    if sel_status != "Tümü":
+        active_filters.append(f"📬 **Durum:** {sel_status}")
+    if min_score > 0:
+        active_filters.append(f"🎯 **Min Skor:** %{min_score}+")
+    if search_kw:
+        active_filters.append(f"🔍 **Kelime:** \"{search_kw}\"")
+
+    if active_filters:
+        badges_str = " &nbsp;|&nbsp; ".join(active_filters)
+        st.markdown(f"<div style='background-color: #f1f5f9; border-radius: 6px; padding: 6px 12px; font-size: 13px; margin-bottom: 12px; color: #334155;'><b>Aktif Filtreler:</b> {badges_str} &nbsp;&nbsp; <b>({len(filtered_jobs_list)} / {len(jobs)} ilan)</b></div>", unsafe_allow_html=True)
+    else:
+        st.markdown(f"🎯 **Toplam {len(filtered_jobs_list)} uygun ilan listeleniyor** (İncelemek istediğin ilanı aşağıdan seçebilirsin):")
 
     if not filtered_jobs_list:
-        st.warning("Bu arama kriterine uygun ilan bulunamadı.")
+        st.warning("⚠️ Seçilen filtre kriterlerine uygun ilan bulunamadı. Filtreleri genişletmeyi veya temizlemeyi deneyebilirsiniz.")
+        if st.button("🔄 Tüm Filtreleri Temizle", key="btn_no_results_reset"):
+            st.session_state["filter_company"] = "Tümü"
+            st.session_state["matcher_search_kw"] = ""
+            st.session_state["matcher_sel_company"] = "Tümü"
+            st.session_state["matcher_sel_cat"] = "Tümü"
+            st.session_state["matcher_sel_lang"] = "Tümü"
+            st.session_state["matcher_sel_loc"] = "Tümü"
+            st.session_state["matcher_sel_role"] = "Tümü"
+            st.session_state["matcher_sel_status"] = "Tümü"
+            st.session_state["matcher_min_score"] = 0
+            st.rerun()
         st.stop()
 
     # ── Master-Detail Layout: Left = Job List, Right = Selected Job Deep Dive ──
@@ -448,20 +832,17 @@ with tab2:
         col_s1, col_s2, col_s3 = st.columns(3)
         with col_s1:
             if st.button("✅ Başvurdum", key=f"btn_app_{selected_job['id']}", use_container_width=True):
-                from src import database
-                database.update_status(selected_job["id"], "applied")
+                db.update_status(selected_job["id"], "applied")
                 st.cache_data.clear()
                 st.rerun()
         with col_s2:
             if st.button("⏳ Kaydet", key=f"btn_sav_{selected_job['id']}", use_container_width=True):
-                from src import database
-                database.update_status(selected_job["id"], "saved")
+                db.update_status(selected_job["id"], "saved")
                 st.cache_data.clear()
                 st.rerun()
         with col_s3:
             if st.button("❌ Atla", key=f"btn_skp_{selected_job['id']}", use_container_width=True):
-                from src import database
-                database.update_status(selected_job["id"], "skipped")
+                db.update_status(selected_job["id"], "skipped")
                 st.cache_data.clear()
                 st.rerun()
 
@@ -548,7 +929,7 @@ with tab2:
         st.markdown('<div class="section-header">🚀 Gemini AI Optimizasyon Motoru</div>',
                     unsafe_allow_html=True)
 
-        col_btn1, col_btn2 = st.columns(2)
+        col_btn1, col_btn2, col_btn3 = st.columns([1.8, 1.8, 1.4])
 
         # ── Button 1: Optimize CV ─────────────────────────────────────────────────
         with col_btn1:
@@ -567,14 +948,36 @@ with tab2:
                 help="Gemini bu ilana ve CV'ne özel profesyonel bir ön yazı hazırlar",
             )
 
-        # ── Optimize CV Result ────────────────────────────────────────────────────
+        # ── Button 3: Download Base CV ───────────────────────────────────────────
+        with col_btn3:
+            try:
+                from src.ai_assistant import generate_cv_pdf
+                base_pdf_bytes = generate_cv_pdf(cv)
+                candidate_name = cv.get("personal", {}).get("name", "Hazal_Tas")
+                safe_cand = "".join(c for c in candidate_name if c.isalnum() or c in " _-").strip().replace(" ", "_") or "CV"
+                st.download_button(
+                    label="📄 Base CV İndir (.pdf)",
+                    data=base_pdf_bytes,
+                    file_name=f"{safe_cand}_Base_CV.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    help="Aktif profilin orijinal CV'sini ATS uyumlu PDF formatında indirir",
+                )
+            except Exception:
+                pass
+
+        # ── Optimize CV Result & Interactive Refiner ─────────────────────────────
         if optimize_clicked:
             if not os.getenv("GEMINI_API_KEY"):
                 st.error("❌ GEMINI_API_KEY ayarlanmamış. .env dosyanızı kontrol edin.")
             else:
                 with st.spinner("🧠 Gemini CV maddelerini optimize ediyor… (15–25 saniye)"):
                     try:
-                        from src.ai_assistant import optimize_cv_for_job
+                        from src.ai_assistant import (
+                            optimize_cv_for_job,
+                            build_tailored_cv_data,
+                        )
+
                         opt = optimize_cv_for_job(
                             job_title=selected_job.get("title", ""),
                             job_company=selected_job.get("company", ""),
@@ -584,54 +987,242 @@ with tab2:
                             cv=cv,
                         )
 
-                        # New score gauge
-                        new_score = opt.get("estimated_new_score", result.score)
-                        delta = new_score - result.score
+                        # Build tailored full CV & store into working session state
+                        tailored_cv = build_tailored_cv_data(opt, cv, company=selected_job.get("company", ""))
+                        st.session_state["tailored_cv_working"] = tailored_cv
+                        st.session_state["tailored_cv_job_id"] = str(selected_job.get("id"))
+                        st.session_state["cv_opt_meta"] = {
+                            "original_score": result.score,
+                            "estimated_new_score": opt.get("estimated_new_score", result.score),
+                            "optimization_notes": opt.get("optimization_notes", ""),
+                        }
+                        st.session_state["cv_copilot_messages"] = [
+                            {
+                                "role": "assistant",
+                                "content": (
+                                    f"🎯 **{selected_job.get('company', '')}** ({selected_job.get('title', '')}) "
+                                    f"pozisyonu için CV'nizi başarıyla optimize ettim!\n\n"
+                                    f"Tahmini ATS skorunuz **%{result.score} → %{opt.get('estimated_new_score', result.score)}** seviyesine yükseltildi.\n\n"
+                                    f"• İstediğiniz maddeyi aşağıdaki kutulardan doğrudan düzenleyebilirsiniz.\n"
+                                    f"• ⚡ **Teknik**, ✂️ **Kısalt** veya 🔁 **Alternatif** butonlarıyla tek tıkla mikro-iyileştirme yapabilirsiniz.\n"
+                                    f"• Ya da aşağıdaki CV Copilot sohbet kutusuna doğrudan talimat verebilirsiniz (*'Twilio projesini çıkar'*, *'Docker deneyimini öne çıkar'* gibi)."
+                                ),
+                            }
+                        ]
+                        st.rerun()
 
-                        col_g1, col_g2, col_note = st.columns([1, 1, 2])
-                        with col_g1:
-                            st.metric("Önceki Skor", f"{result.score}%")
-                        with col_g2:
-                            st.metric("Optimize Skor", f"{new_score}%", delta=f"+{delta}%")
-                        with col_note:
-                            note = opt.get("optimization_notes", "")
-                            if note:
-                                st.info(f"💡 {note}")
-
-                        # Show before → after comparison
-                        st.markdown("#### 💼 Optimize Edilmiş Deneyim Maddeleri")
-                        for exp in opt.get("optimized_experience", []):
-                            with st.expander(f"💼 {exp.get('role', '')}", expanded=True):
-                                for bullet in exp.get("bullets", []):
-                                    st.markdown(f"• {bullet}")
-
-                        if opt.get("optimized_projects"):
-                            st.markdown("#### 🔬 Optimize Edilmiş Proje Maddeleri")
-                            for proj in opt.get("optimized_projects", []):
-                                with st.expander(f"🔬 {proj.get('name', '')}", expanded=True):
-                                    for bullet in proj.get("bullets", []):
-                                        st.markdown(f"• {bullet}")
-
-                        # Copy-paste ready text
-                        all_bullets = []
-                        for exp in opt.get("optimized_experience", []):
-                            all_bullets.append(f"== {exp.get('role')} ==")
-                            all_bullets.extend(f"• {b}" for b in exp.get("bullets", []))
-                        for proj in opt.get("optimized_projects", []):
-                            all_bullets.append(f"== {proj.get('name')} (Project) ==")
-                            all_bullets.extend(f"• {b}" for b in proj.get("bullets", []))
-
-                        st.download_button(
-                            label="📥 Optimize Maddeleri İndir (.txt)",
-                            data="\n".join(all_bullets),
-                            file_name=f"optimized_cv_{selected_job.get('company','job')}.txt",
-                            mime="text/plain",
-                        )
-
-                    except json.JSONDecodeError:
-                        st.error("⚠️ Gemini beklenmeyen format döndü. Lütfen tekrar deneyin.")
+                    except json.JSONDecodeError as exc:
+                        st.error(f"⚠️ Gemini beklenmeyen format döndü: {exc}. Lütfen tekrar deneyin.")
                     except Exception as exc:
                         st.error(f"⚠️ Optimizasyon başarısız: {exc}")
+
+        # If we have an active tailored CV for the currently selected job, render the interactive refiner
+        current_job_id_str = str(selected_job.get("id"))
+        if st.session_state.get("tailored_cv_working") and st.session_state.get("tailored_cv_job_id") == current_job_id_str:
+            tailored_cv = st.session_state["tailored_cv_working"]
+            opt_meta = st.session_state.get("cv_opt_meta", {})
+            orig_score = opt_meta.get("original_score", result.score)
+            new_score = opt_meta.get("estimated_new_score", result.score)
+            delta = new_score - orig_score
+
+            st.markdown("---")
+            st.markdown("### ✨ İlana Özel Optimize Edilmiş CV & İnteraktif Düzenleyici")
+
+            col_g1, col_g2, col_note = st.columns([1, 1, 2])
+            with col_g1:
+                st.metric("Önceki Skor", f"{orig_score}%")
+            with col_g2:
+                st.metric("Optimize Skor", f"{new_score}%", delta=f"+{delta}%" if delta >= 0 else f"{delta}%")
+            with col_note:
+                note = opt_meta.get("optimization_notes", "")
+                if note:
+                    st.info(f"💡 {note}")
+
+            from src.ai_assistant import generate_cv_pdf, generate_cv_docx
+
+            # Candidate & company name for filenames
+            candidate_name = tailored_cv.get("personal", {}).get("name", "Candidate")
+            safe_candidate = "".join(c for c in candidate_name if c.isalnum() or c in " _-").strip().replace(" ", "_") or "Candidate"
+            raw_co = selected_job.get("company", "job")
+            safe_co = "".join(c for c in raw_co if c.isalnum() or c in " _-").strip().replace(" ", "_") or "job"
+
+            # Always dynamically generate bytes from live working state
+            pdf_bytes = generate_cv_pdf(tailored_cv)
+            docx_bytes = generate_cv_docx(tailored_cv)
+
+            all_bullets = []
+            for exp in tailored_cv.get("experience", []):
+                all_bullets.append(f"== {exp.get('role')} @ {exp.get('company')} ==")
+                all_bullets.extend(f"• {b}" for b in exp.get("bullets", []))
+            for proj in tailored_cv.get("projects", []):
+                all_bullets.append(f"== {proj.get('name')} (Project) ==")
+                all_bullets.extend(f"• {b}" for b in proj.get("bullets", []))
+
+            col_dl_pdf, col_dl_docx, col_dl_txt = st.columns([1.5, 1.2, 1])
+            with col_dl_pdf:
+                st.download_button(
+                    label="📥 Canlı CV'yi İndir (.pdf)",
+                    data=pdf_bytes,
+                    file_name=f"{safe_candidate}_CV_{safe_co}.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                    use_container_width=True,
+                    help="Yapılan tüm düzenlemeleri ve revizyonları içeren güncel CV'yi PDF olarak indirir",
+                )
+            with col_dl_docx:
+                st.download_button(
+                    label="📄 Word İndir (.docx)",
+                    data=docx_bytes,
+                    file_name=f"{safe_candidate}_CV_{safe_co}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                    help="Canlı düzenlenen güncel CV'yi düzenlenebilir Word belgesi olarak indirir",
+                )
+            with col_dl_txt:
+                st.download_button(
+                    label="📝 Maddeleri İndir (.txt)",
+                    data="\n".join(all_bullets),
+                    file_name=f"{safe_candidate}_bullets_{safe_co}.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                    help="Sadece optimize edilmiş madde metinlerini indirir",
+                )
+
+            # Editable summary
+            st.markdown("#### 📝 İlana Özel Profesyonel Özet (Summary)")
+            current_summary = tailored_cv.get("summary", "")
+            edited_summary = st.text_area(
+                "Özet Metni (doğrudan düzenleyebilirsiniz):",
+                value=current_summary,
+                height=90,
+                key=f"working_summary_{selected_job.get('id')}",
+            )
+            if edited_summary != current_summary:
+                tailored_cv["summary"] = edited_summary
+
+            job_ctx = f"Job: {selected_job.get('title')} at {selected_job.get('company')}. Requirements: {selected_job.get('description', '')[:500]}"
+
+            # Experience section with inline editing + micro-actions
+            if tailored_cv.get("experience"):
+                st.markdown("#### 💼 Deneyim Maddeleri & Mikro-İyileştirmeler")
+                st.caption("Her maddeyi doğrudan metin kutusundan değiştirebilir veya altındaki yapay zeka butonlarıyla tek tıkla dönüştürebilirsiniz:")
+                for exp_idx, exp in enumerate(tailored_cv.get("experience", [])):
+                    role_label = exp.get("role", "")
+                    company_label = exp.get("company", "")
+                    with st.expander(f"💼 {role_label} — {company_label}", expanded=True):
+                        new_bullets = list(exp.get("bullets", []))
+                        for b_idx, bullet in enumerate(new_bullets):
+                            col_input, col_m1, col_m2, col_m3 = st.columns([6, 1.2, 1.1, 1.2])
+                            with col_input:
+                                edited_bullet = st.text_input(
+                                    f"Bullet {exp_idx}_{b_idx}",
+                                    value=bullet,
+                                    key=f"input_exp_{selected_job.get('id')}_{exp_idx}_{b_idx}",
+                                    label_visibility="collapsed",
+                                )
+                                if edited_bullet != bullet:
+                                    new_bullets[b_idx] = edited_bullet
+                                    tailored_cv["experience"][exp_idx]["bullets"] = new_bullets
+                            with col_m1:
+                                if st.button("⚡ Teknik", key=f"btn_tech_exp_{exp_idx}_{b_idx}", help="Metrik ve teknik araçlarla derinleştir"):
+                                    with st.spinner("⚡"):
+                                        from src.ai_assistant import refine_cv_bullet
+                                        refined = refine_cv_bullet(bullet, "technical", job_ctx)
+                                        new_bullets[b_idx] = refined
+                                        tailored_cv["experience"][exp_idx]["bullets"] = new_bullets
+                                        st.rerun()
+                            with col_m2:
+                                if st.button("✂️ Kısalt", key=f"btn_short_exp_{exp_idx}_{b_idx}", help="Daha vurucu ve kısa yap"):
+                                    with st.spinner("✂️"):
+                                        from src.ai_assistant import refine_cv_bullet
+                                        refined = refine_cv_bullet(bullet, "shorten", job_ctx)
+                                        new_bullets[b_idx] = refined
+                                        tailored_cv["experience"][exp_idx]["bullets"] = new_bullets
+                                        st.rerun()
+                            with col_m3:
+                                if st.button("🔁 Alternatif", key=f"btn_alt_exp_{exp_idx}_{b_idx}", help="Farklı bir bakış açısıyla yeniden yaz"):
+                                    with st.spinner("🔁"):
+                                        from src.ai_assistant import refine_cv_bullet
+                                        refined = refine_cv_bullet(bullet, "alternative", job_ctx)
+                                        new_bullets[b_idx] = refined
+                                        tailored_cv["experience"][exp_idx]["bullets"] = new_bullets
+                                        st.rerun()
+
+            # Projects section with inline editing + micro-actions
+            if tailored_cv.get("projects"):
+                st.markdown("#### 🔬 Proje Maddeleri & Mikro-İyileştirmeler")
+                for p_idx, proj in enumerate(tailored_cv.get("projects", [])):
+                    proj_name = proj.get("name", "")
+                    with st.expander(f"🔬 {proj_name}", expanded=True):
+                        new_p_bullets = list(proj.get("bullets", []))
+                        for b_idx, bullet in enumerate(new_p_bullets):
+                            col_input, col_m1, col_m2, col_m3 = st.columns([6, 1.2, 1.1, 1.2])
+                            with col_input:
+                                edited_bullet = st.text_input(
+                                    f"Proj Bullet {p_idx}_{b_idx}",
+                                    value=bullet,
+                                    key=f"input_proj_{selected_job.get('id')}_{p_idx}_{b_idx}",
+                                    label_visibility="collapsed",
+                                )
+                                if edited_bullet != bullet:
+                                    new_p_bullets[b_idx] = edited_bullet
+                                    tailored_cv["projects"][p_idx]["bullets"] = new_p_bullets
+                            with col_m1:
+                                if st.button("⚡ Teknik", key=f"btn_tech_proj_{p_idx}_{b_idx}", help="Metrik ve teknik araçlarla derinleştir"):
+                                    with st.spinner("⚡"):
+                                        from src.ai_assistant import refine_cv_bullet
+                                        refined = refine_cv_bullet(bullet, "technical", job_ctx)
+                                        new_p_bullets[b_idx] = refined
+                                        tailored_cv["projects"][p_idx]["bullets"] = new_p_bullets
+                                        st.rerun()
+                            with col_m2:
+                                if st.button("✂️ Kısalt", key=f"btn_short_proj_{p_idx}_{b_idx}", help="Daha vurucu ve kısa yap"):
+                                    with st.spinner("✂️"):
+                                        from src.ai_assistant import refine_cv_bullet
+                                        refined = refine_cv_bullet(bullet, "shorten", job_ctx)
+                                        new_p_bullets[b_idx] = refined
+                                        tailored_cv["projects"][p_idx]["bullets"] = new_p_bullets
+                                        st.rerun()
+                            with col_m3:
+                                if st.button("🔁 Alternatif", key=f"btn_alt_proj_{p_idx}_{b_idx}", help="Farklı bir bakış açısıyla yeniden yaz"):
+                                    with st.spinner("🔁"):
+                                        from src.ai_assistant import refine_cv_bullet
+                                        refined = refine_cv_bullet(bullet, "alternative", job_ctx)
+                                        new_p_bullets[b_idx] = refined
+                                        tailored_cv["projects"][p_idx]["bullets"] = new_p_bullets
+                                        st.rerun()
+
+            # Conversational CV Copilot
+            st.markdown("---")
+            st.markdown("#### 💬 CV Copilot — Doğal Dille Düzenleme Asistanı")
+            st.caption("CV üzerinde istediğiniz her türlü değişikliği serbestçe söyleyin (örn: *'Fotoğraf projesindeki Twilio kısmını çıkar, Docker ve Kubernetes deneyimini vurgula'*).")
+
+            chat_history = st.session_state.get("cv_copilot_messages", [])
+            for msg in chat_history:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+            if copilot_prompt := st.chat_input("CV'nizde neyi değiştirmek istersiniz?"):
+                chat_history.append({"role": "user", "content": copilot_prompt})
+                st.session_state["cv_copilot_messages"] = chat_history
+
+                with st.spinner("🤖 Copilot CV'nizi güncelliyor…"):
+                    try:
+                        from src.ai_assistant import chat_refine_cv
+                        updated_cv, explanation = chat_refine_cv(
+                            current_cv=tailored_cv,
+                            user_prompt=copilot_prompt,
+                            chat_history=chat_history[:-1],
+                            job_title=selected_job.get("title", ""),
+                            company=selected_job.get("company", ""),
+                            description=selected_job.get("description", ""),
+                        )
+                        st.session_state["tailored_cv_working"] = updated_cv
+                        chat_history.append({"role": "assistant", "content": explanation})
+                        st.session_state["cv_copilot_messages"] = chat_history
+                        st.rerun()
+                    except Exception as chat_err:
+                        st.error(f"⚠️ Copilot düzenleme hatası: {chat_err}")
 
         # ── Cover Letter Result ───────────────────────────────────────────────────
         if cover_clicked:
@@ -665,16 +1256,61 @@ with tab2:
                             label_visibility="collapsed",
                         )
 
-                        col_copy, col_dl = st.columns(2)
-                        with col_dl:
+                        from src.ai_assistant import (
+                            generate_cover_letter_pdf,
+                            generate_cover_letter_docx,
+                        )
+
+                        # Safe company name
+                        raw_co = selected_job.get("company", "job")
+                        safe_co = "".join(c for c in raw_co if c.isalnum() or c in " _-").strip().replace(" ", "_") or "job"
+                        job_title_str = selected_job.get("title", "")
+
+                        # Generate PDF and DOCX bytes using current/edited text
+                        cl_pdf_bytes = generate_cover_letter_pdf(
+                            text=edited,
+                            job_title=job_title_str,
+                            company=raw_co,
+                            cv=cv,
+                        )
+                        cl_docx_bytes = generate_cover_letter_docx(
+                            text=edited,
+                            job_title=job_title_str,
+                            company=raw_co,
+                            cv=cv,
+                        )
+
+                        col_dl_cl_pdf, col_dl_cl_docx, col_dl_cl_txt = st.columns([1.5, 1.2, 1])
+                        with col_dl_cl_pdf:
                             st.download_button(
-                                label="📥 Ön Yazıyı İndir (.txt)",
+                                label="📥 Ön Yazıyı İndir (.pdf)",
+                                data=cl_pdf_bytes,
+                                file_name=f"CoverLetter_{safe_co}.pdf",
+                                mime="application/pdf",
+                                type="primary",
+                                use_container_width=True,
+                                help="Özel tasarlanmış, profesyonel Cover Letter belgenizi PDF olarak indirir",
+                            )
+                        with col_dl_cl_docx:
+                            st.download_button(
+                                label="📄 Word İndir (.docx)",
+                                data=cl_docx_bytes,
+                                file_name=f"CoverLetter_{safe_co}.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True,
+                                help="Ön yazıyı Word belgesi olarak indirir",
+                            )
+                        with col_dl_cl_txt:
+                            st.download_button(
+                                label="📝 Metin İndir (.txt)",
                                 data=edited,
-                                file_name=f"CoverLetter_{selected_job.get('company','job')}.txt",
+                                file_name=f"CoverLetter_{safe_co}.txt",
                                 mime="text/plain",
+                                use_container_width=True,
+                                help="Ön yazı metnini düz yazı (.txt) olarak indirir",
                             )
 
-                        st.success("✅ Ön yazı hazır! İster yukarıda düzenleyip kopyalayın, ister indirin.")
+                        st.success("✅ Ön yazı hazır! İster yukarıdaki kutuda düzenleyip PDF/Word olarak indirin, ister metni kopyalayın.")
 
                     except Exception as exc:
                         st.error(f"⚠️ Ön yazı üretimi başarısız: {exc}")
@@ -687,8 +1323,7 @@ with tab3:
     st.markdown('<div class="section-header">📬 Başvuru Takip & E-posta Takipçisi (Follow-up & CRM)</div>', unsafe_allow_html=True)
     st.caption("Başvurduğunuz pozisyonların durumlarını yönetin, 7 günü geçenlere otomatik follow-up maili oluşturun ve Gmail gelen kutunuzu yapay zeka ile takip edin.")
 
-    db = _load_db_module()
-    applied_jobs = db.get_applied_jobs()
+    applied_jobs = load_applied_jobs()
 
     # Pre-calculate elapsed days for each applied job
     from datetime import timedelta
@@ -854,7 +1489,8 @@ with tab3:
                         )
 
                         # Extract subject line if present
-                        subject_line = f"Follow-up: Application for {job.get('title', '')} - Hazal Taş"
+                        _cand_name = cv.get("personal", {}).get("name", "Hazal Taş") if "cv" in locals() and cv else "Hazal Taş"
+                        subject_line = f"Follow-up: Application for {job.get('title', '')} - {_cand_name}"
                         body_to_send = fu_edited
                         for line in fu_edited.split("\n"):
                             if line.lower().startswith("subject:"):

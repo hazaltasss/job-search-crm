@@ -48,25 +48,27 @@ def main() -> None:
         logger.error("Database init failed: %s", exc)
         sys.exit(1)
 
-    # ── Step 2: Fetch (Concurrent across all 4 sources) ────────────────────────
+    # ── Step 2: Fetch (Concurrent across all 5 sources) ────────────────────────
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from src.fetchers.arbeitnow import fetch_jobs as fetch_arbeitnow
     from src.fetchers.workingstudentjobs import fetch_jobs as fetch_wsj
     from src.fetchers.hiringcafe import fetch_jobs as fetch_hiringcafe
     from src.fetchers.linkedin import fetch_jobs as fetch_linkedin
+    from src.fetchers.berlinstartupjobs import fetch_jobs as fetch_bsj
 
     fetcher_tasks = {
         "Arbeitnow": lambda: fetch_arbeitnow(max_pages=8),
         "WorkingStudentJobs": lambda: fetch_wsj(max_pages=2),
         "HiringCafe": lambda: fetch_hiringcafe(),
         "LinkedIn": lambda: fetch_linkedin(),
+        "BerlinStartupJobs": lambda: fetch_bsj(),
     }
 
     raw_jobs = []
     fetch_errors = []
     source_counts = {}
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {
             pool.submit(fn): name
             for name, fn in fetcher_tasks.items()

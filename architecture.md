@@ -66,10 +66,16 @@ graph TD
 ## 2. Core Subsystems & Components
 
 ### 2.1 Data Ingestion & Scrapers (`src/fetchers/`)
-The system queries multiple job platforms and extracts structured data:
-- **`arbeitnow.py`**: Interacts with the Arbeitnow REST API. Fetches modern tech, data, and engineering listings; parses remote tags and Berlin coordinates.
-- **`workingstudentjobs.py`**: Web scraper targeting working student positions across Germany. Extracts embedded `schema.org/JobPosting` JSON-LD data with a BeautifulSoup fallback for non-standard markup.
-- **`hiringcafe.py`**: Uses search payloads with anti-bot user-agent headers to fetch recent listings without triggering CDN rate limits.
+The system queries 9 diverse job platforms and company ATS portals concurrently:
+- **`greenhouse.py`**: Direct REST API client for 20+ top Berlin & German tech companies (HelloFresh, SumUp, N26, GetYourGuide, Celonis, Solaris, Raisin, etc.).
+- **`personio.py`**: XML syndication fetcher for leading Berlin startups and scaleups using Personio ATS (Taxfix, Sennder, Tourlane, Clue, Y42, Deepset, Parloa, etc.).
+- **`berlinstartupjobs.py`**: RSS feed parser for Berlin's local startup ecosystem tech and internship roles.
+- **`linkedin.py`**: Scraper targeting Berlin and Germany-wide student tech roles on LinkedIn.
+- **`workwise.py`**: Workwise category hubs and real-time enquiry focus sitemap parser with schema.org JSON-LD extraction.
+- **`jobteaser.py`**: European & German university career portal scraper focusing on student and internship listings.
+- **`arbeitnow.py`**: REST API client for Arbeitnow's English-speaking, flexible EU/Germany listings.
+- **`workingstudentjobs.py`**: Targeted German university working student portal scraper with schema.org/JobPosting JSON-LD parser.
+- **`hiringcafe.py`**: Search queries indexing direct company websites.
 
 ### 2.2 Strict Quality & Language Filter Pipeline (`src/filters.py`)
 Quality control runs through a 3-tier deterministic filter pipeline before any job reaches the database:

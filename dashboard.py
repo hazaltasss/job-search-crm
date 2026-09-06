@@ -1112,41 +1112,43 @@ with tab2:
                     with st.expander(f"💼 {role_label} — {company_label}", expanded=True):
                         new_bullets = list(exp.get("bullets", []))
                         for b_idx, bullet in enumerate(new_bullets):
-                            col_input, col_m1, col_m2, col_m3 = st.columns([6, 1.2, 1.1, 1.2])
-                            with col_input:
-                                edited_bullet = st.text_input(
-                                    f"Bullet {exp_idx}_{b_idx}",
-                                    value=bullet,
-                                    key=f"input_exp_{selected_job.get('id')}_{exp_idx}_{b_idx}",
-                                    label_visibility="collapsed",
-                                )
-                                if edited_bullet != bullet:
-                                    new_bullets[b_idx] = edited_bullet
-                                    tailored_cv["experience"][exp_idx]["bullets"] = new_bullets
+                            edited_bullet = st.text_area(
+                                f"Exp Bullet {exp_idx}_{b_idx}",
+                                value=bullet,
+                                height=68,
+                                key=f"input_exp_{selected_job.get('id')}_{exp_idx}_{b_idx}",
+                                label_visibility="collapsed",
+                            )
+                            if edited_bullet != bullet:
+                                new_bullets[b_idx] = edited_bullet
+                                tailored_cv["experience"][exp_idx]["bullets"] = new_bullets
+
+                            col_m1, col_m2, col_m3, col_pad = st.columns([1.5, 1.5, 1.8, 3.2])
                             with col_m1:
-                                if st.button("⚡ Teknik", key=f"btn_tech_exp_{exp_idx}_{b_idx}", help="Metrik ve teknik araçlarla derinleştir"):
-                                    with st.spinner("⚡"):
+                                if st.button("⚡ Daha Teknik", key=f"btn_tech_exp_{exp_idx}_{b_idx}", use_container_width=True, help="Metrik ve teknik araçlarla derinleştir"):
+                                    with st.spinner("⚡ Teknik revizyon yapılıyor..."):
                                         from src.ai_assistant import refine_cv_bullet
                                         refined = refine_cv_bullet(bullet, "technical", job_ctx)
                                         new_bullets[b_idx] = refined
                                         tailored_cv["experience"][exp_idx]["bullets"] = new_bullets
                                         st.rerun()
                             with col_m2:
-                                if st.button("✂️ Kısalt", key=f"btn_short_exp_{exp_idx}_{b_idx}", help="Daha vurucu ve kısa yap"):
-                                    with st.spinner("✂️"):
+                                if st.button("✂️ Kısalt", key=f"btn_short_exp_{exp_idx}_{b_idx}", use_container_width=True, help="Daha vurucu ve kısa yap"):
+                                    with st.spinner("✂️ Kısaltılıyor..."):
                                         from src.ai_assistant import refine_cv_bullet
                                         refined = refine_cv_bullet(bullet, "shorten", job_ctx)
                                         new_bullets[b_idx] = refined
                                         tailored_cv["experience"][exp_idx]["bullets"] = new_bullets
                                         st.rerun()
                             with col_m3:
-                                if st.button("🔁 Alternatif", key=f"btn_alt_exp_{exp_idx}_{b_idx}", help="Farklı bir bakış açısıyla yeniden yaz"):
-                                    with st.spinner("🔁"):
+                                if st.button("🔁 Alternatif", key=f"btn_alt_exp_{exp_idx}_{b_idx}", use_container_width=True, help="Farklı bir bakış açısıyla yeniden yaz"):
+                                    with st.spinner("🔁 Alternatif üretiliyor..."):
                                         from src.ai_assistant import refine_cv_bullet
                                         refined = refine_cv_bullet(bullet, "alternative", job_ctx)
                                         new_bullets[b_idx] = refined
                                         tailored_cv["experience"][exp_idx]["bullets"] = new_bullets
                                         st.rerun()
+                            st.write("")
 
             # Projects section with inline editing + micro-actions
             if tailored_cv.get("projects"):
@@ -1156,41 +1158,43 @@ with tab2:
                     with st.expander(f"🔬 {proj_name}", expanded=True):
                         new_p_bullets = list(proj.get("bullets", []))
                         for b_idx, bullet in enumerate(new_p_bullets):
-                            col_input, col_m1, col_m2, col_m3 = st.columns([6, 1.2, 1.1, 1.2])
-                            with col_input:
-                                edited_bullet = st.text_input(
-                                    f"Proj Bullet {p_idx}_{b_idx}",
-                                    value=bullet,
-                                    key=f"input_proj_{selected_job.get('id')}_{p_idx}_{b_idx}",
-                                    label_visibility="collapsed",
-                                )
-                                if edited_bullet != bullet:
-                                    new_p_bullets[b_idx] = edited_bullet
-                                    tailored_cv["projects"][p_idx]["bullets"] = new_p_bullets
+                            edited_bullet = st.text_area(
+                                f"Proj Bullet {p_idx}_{b_idx}",
+                                value=bullet,
+                                height=68,
+                                key=f"input_proj_{selected_job.get('id')}_{p_idx}_{b_idx}",
+                                label_visibility="collapsed",
+                            )
+                            if edited_bullet != bullet:
+                                new_p_bullets[b_idx] = edited_bullet
+                                tailored_cv["projects"][p_idx]["bullets"] = new_p_bullets
+
+                            col_m1, col_m2, col_m3, col_pad = st.columns([1.5, 1.5, 1.8, 3.2])
                             with col_m1:
-                                if st.button("⚡ Teknik", key=f"btn_tech_proj_{p_idx}_{b_idx}", help="Metrik ve teknik araçlarla derinleştir"):
-                                    with st.spinner("⚡"):
+                                if st.button("⚡ Daha Teknik", key=f"btn_tech_proj_{p_idx}_{b_idx}", use_container_width=True, help="Metrik ve teknik araçlarla derinleştir"):
+                                    with st.spinner("⚡ Teknik revizyon yapılıyor..."):
                                         from src.ai_assistant import refine_cv_bullet
                                         refined = refine_cv_bullet(bullet, "technical", job_ctx)
                                         new_p_bullets[b_idx] = refined
                                         tailored_cv["projects"][p_idx]["bullets"] = new_p_bullets
                                         st.rerun()
                             with col_m2:
-                                if st.button("✂️ Kısalt", key=f"btn_short_proj_{p_idx}_{b_idx}", help="Daha vurucu ve kısa yap"):
-                                    with st.spinner("✂️"):
+                                if st.button("✂️ Kısalt", key=f"btn_short_proj_{p_idx}_{b_idx}", use_container_width=True, help="Daha vurucu ve kısa yap"):
+                                    with st.spinner("✂️ Kısaltılıyor..."):
                                         from src.ai_assistant import refine_cv_bullet
                                         refined = refine_cv_bullet(bullet, "shorten", job_ctx)
                                         new_p_bullets[b_idx] = refined
                                         tailored_cv["projects"][p_idx]["bullets"] = new_p_bullets
                                         st.rerun()
                             with col_m3:
-                                if st.button("🔁 Alternatif", key=f"btn_alt_proj_{p_idx}_{b_idx}", help="Farklı bir bakış açısıyla yeniden yaz"):
-                                    with st.spinner("🔁"):
+                                if st.button("🔁 Alternatif", key=f"btn_alt_proj_{p_idx}_{b_idx}", use_container_width=True, help="Farklı bir bakış açısıyla yeniden yaz"):
+                                    with st.spinner("🔁 Alternatif üretiliyor..."):
                                         from src.ai_assistant import refine_cv_bullet
                                         refined = refine_cv_bullet(bullet, "alternative", job_ctx)
                                         new_p_bullets[b_idx] = refined
                                         tailored_cv["projects"][p_idx]["bullets"] = new_p_bullets
                                         st.rerun()
+                            st.write("")
 
             # Conversational CV Copilot
             st.markdown("---")

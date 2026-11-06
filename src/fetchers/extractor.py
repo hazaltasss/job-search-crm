@@ -132,28 +132,50 @@ def extract_full_job(url: str, raw_html: Optional[str] = None) -> dict[str, str]
         # A. Try schema.org JSON-LD (JobPosting)
         for s in soup.find_all("script", type="application/ld+json"):
             try:
-                if not s.string:
+                content = (s.string or s.get_text() or "").strip()
+                if not content:
                     continue
-                ld_data = json.loads(s.string)
+                ld_data = json.loads(content)
                 items = ld_data if isinstance(ld_data, list) else [ld_data]
                 for item in items:
-                    if isinstance(item, dict) and item.get("@type") == "JobPosting":
-                        if not title and item.get("title"):
-                            t = str(item["title"]).strip()
+                    if not isinstance(item, dict):
+                        continue
+                    # Case-insensitive attribute lookup
+                    ci = {k.lower(): v for k, v in item.items()}
+                    type_str = str(ci.get("@type", "")).lower()
+                    if "jobposting" in type_str:
+                        cand_title = ci.get("title")
+                        if not title and cand_title:
+                            t = str(cand_title).strip()
                             if t.lower() not in LOGIN_REJECT_TITLES:
                                 title = t
-                        if not company and isinstance(item.get("hiringOrganization"), dict):
-                            company = item["hiringOrganization"].get("name", "").strip()
-                        if item.get("description"):
-                            ld_desc_clean = _clean_soup_text(html.unescape(item["description"]))
+
+                        cand_org = ci.get("hiringorganization")
+                        if not company and isinstance(cand_org, dict):
+                            ci_org = {k.lower(): v for k, v in cand_org.items()}
+                            company = str(ci_org.get("name", "")).strip()
+                        elif not company and isinstance(cand_org, str):
+                            company = cand_org.strip()
+
+                        cand_desc = ci.get("description")
+                        if cand_desc:
+                            ld_desc_clean = _clean_soup_text(html.unescape(str(cand_desc)))
                             if len(ld_desc_clean) > len(desc):
                                 desc = ld_desc_clean
-                        loc_info = item.get("jobLocation")
-                        if isinstance(loc_info, dict) and isinstance(loc_info.get("address"), dict):
-                            addr = loc_info["address"]
-                            cand_loc = addr.get("addressLocality") or addr.get("addressRegion")
-                            if cand_loc:
-                                location = cand_loc.strip()
+
+                        loc_info = ci.get("joblocation")
+                        if isinstance(loc_info, list) and loc_info:
+                            loc_info = loc_info[0]
+                        if isinstance(loc_info, dict):
+                            ci_loc = {k.lower(): v for k, v in loc_info.items()}
+                            addr = ci_loc.get("address")
+                            if isinstance(addr, dict):
+                                ci_addr = {k.lower(): v for k, v in addr.items()}
+                                cand_loc = ci_addr.get("addresslocality") or ci_addr.get("addressregion") or ci_addr.get("addresscountry")
+                                if isinstance(cand_loc, dict):
+                                    cand_loc = cand_loc.get("name") or cand_loc.get("Name")
+                                if cand_loc:
+                                    location = str(cand_loc).strip()
             except Exception:
                 pass
 
@@ -203,6 +225,10 @@ def extract_full_job(url: str, raw_html: Optional[str] = None) -> dict[str, str]
                 company = og_t["content"].split(" at ")[1].split(" — ")[0].split(" | ")[0].strip()
             elif "personio" in url_str.lower():
                 m = re.search(r"https?://([^.]+)\.jobs\.personio", url_str)
+                if m:
+                    company = m.group(1).capitalize()
+            elif "csod.com" in url_str.lower():
+                m = re.search(r"https?://([^.]+)\.csod\.com", url_str)
                 if m:
                     company = m.group(1).capitalize()
             elif "join.com" in url_str.lower():

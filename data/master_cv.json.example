@@ -79,14 +79,14 @@
     },
     {
       "name": "Automated Job Application & Pipeline Agent",
-      "technologies_header": "Python, Gemini API, GitHub Actions, Google Sheets API, Telegram Bot",
-      "technologies": ["Python", "Gemini API", "GitHub Actions", "Google Sheets API", "Telegram Bot"],
+      "technologies_header": "Python, Gemini API, GitHub Actions, Streamlit, SQLite, Google Sheets API",
+      "technologies": ["Python", "Gemini API", "GitHub Actions", "Streamlit", "SQLite", "Google Sheets API"],
       "description": "Developed an autonomous end-to-end job tracking and parsing agent scraping real-time postings across European tech job boards twice daily. Integrated Gemini LLM workflows to dynamically parse job descriptions, generate tailored cover letters, and produce ATS-optimized CV drafts.",
       "url": "",
       "bullets": [
         "Developed an autonomous end-to-end job tracking and parsing agent scraping real-time postings across European tech job boards twice daily.",
         "Integrated Gemini LLM workflows to dynamically parse job descriptions, generate tailored cover letters, and produce ATS-optimized CV drafts based on role criteria.",
-        "Orchestrated scheduled automated pipelines via GitHub Actions, persisting structured pipeline states and application metrics directly into live spreadsheets and Telegram alerts."
+        "Orchestrated scheduled automated pipelines via GitHub Actions, persisting structured pipeline states and application metrics directly into SQLite and Google Sheets."
       ]
     },
     {

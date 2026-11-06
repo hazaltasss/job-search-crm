@@ -29,12 +29,11 @@ def main() -> None:
     try:
         from src.database import init_db
         from src.analytics import build_weekly_report
-        from src.telegram_bot import send_text
 
         init_db()
         report = build_weekly_report()
-        send_text(report)
-        logger.info("✅ Weekly report sent to Telegram.")
+        logger.info("\n%s", report)
+        logger.info("✅ Weekly report generated successfully.")
     except Exception as exc:
         logger.error("Weekly report failed: %s", exc)
         sys.exit(1)

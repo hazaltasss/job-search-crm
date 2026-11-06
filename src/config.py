@@ -25,8 +25,7 @@ socket.getaddrinfo = _getaddrinfo_ipv4
 def _require(key: str) -> str:
     """
     Returns the env var value, or empty string if not set.
-    Individual modules validate their own secrets when actually called —
-    this prevents the dashboard from crashing when Telegram/Sheets are not configured.
+    Individual modules validate their own secrets when actually called.
     """
     return os.getenv(key, "")
 
@@ -41,9 +40,6 @@ def _validate(key: str, value: str, context: str = "") -> str:
         )
     return value
 
-
-TELEGRAM_BOT_TOKEN: str = _require("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID: str   = _require("TELEGRAM_CHAT_ID")
 
 GOOGLE_SHEET_ID: str    = _require("GOOGLE_SHEET_ID")
 

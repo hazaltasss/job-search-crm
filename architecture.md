@@ -41,8 +41,7 @@ graph TD
         TAB4["📬 Tab 4: Application CRM & Email Hub<br/>(7-Day Tracker, Mailto, Sync)"]
     end
 
-    subgraph Sync_Channels["📡 Notification & External Channels"]
-        TG["Telegram Bot<br/>(Alerts & Inline Actions)"]
+    subgraph Sync_Channels["📡 External Integrations & Storage"]
         GS["Google Sheets CRM<br/>(Live Row Tracking)"]
         GMAIL["Gmail IMAP (SSL)<br/>(Recent Application Emails)"]
     end
@@ -58,7 +57,6 @@ graph TD
     DB --> AI1
     AI_Intelligence <--> Application_UI
     GMAIL --> AI5 --> DB
-    DB --> TG
     DB --> GS
 ```
 

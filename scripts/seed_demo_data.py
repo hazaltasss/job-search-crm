@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 # Env placeholder so config.py doesn't crash
-for _v in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "GOOGLE_SHEET_ID", "GEMINI_API_KEY"]:
+for _v in ["GOOGLE_SHEET_ID", "GEMINI_API_KEY"]:
     if not os.getenv(_v):
         os.environ[_v] = "__demo__"
 

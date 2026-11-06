@@ -8,8 +8,7 @@ Flow:
   3. Run the filter pipeline (location, strict English language, category)
   4. Deduplicate against the local database
   5. Append new jobs to Google Sheets (if configured)
-  6. Send Telegram notifications with inline buttons (if configured)
-  7. Log a run summary
+  6. Store in SQLite database and log summary
 """
 import logging
 import sys
@@ -155,9 +154,8 @@ def main(progress_callback=None) -> dict:
             "elapsed": elapsed,
         }
 
-    # ── Step 5: Store in DB & Optional Sheet / Telegram Sync ──────────────────
+    # ── Step 5: Store in DB & Optional Sheet Sync ────────────────────────────
     import os
-    telegram_enabled = bool(os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_BOT_TOKEN") not in ("__skip__", "__not_configured__", "your_telegram_bot_token_here"))
     sheets_enabled = bool(os.getenv("GOOGLE_SHEET_ID") and os.getenv("GOOGLE_SHEET_ID") not in ("__skip__", "__not_configured__", "your_google_sheet_id_here"))
 
     if sheets_enabled:
@@ -168,7 +166,6 @@ def main(progress_callback=None) -> dict:
             logger.warning("Could not verify sheet headers: %s", exc)
             sheets_enabled = False
 
-    sent_count = 0
     saved_count = 0
     errors = []
 
@@ -188,12 +185,6 @@ def main(progress_callback=None) -> dict:
                 except Exception as sheet_exc:
                     logger.warning("Sheet append failed for '%s': %s", job.title, sheet_exc)
 
-            # 5c. Send Telegram notification (if configured)
-            if telegram_enabled:
-                from src.telegram_bot import send_job_alert
-                send_job_alert(job, db_id)
-                sent_count += 1
-
         except Exception as exc:
             logger.error("Failed to process job '%s': %s", job.title, exc)
             errors.append(job.title)
@@ -210,7 +201,7 @@ def main(progress_callback=None) -> dict:
     table.add_row("Total raw fetched", str(len(raw_jobs)))
     table.add_row("Passed filters",   str(len(filtered_jobs)))
     table.add_row("New (unique)",      str(len(new_jobs)))
-    table.add_row("Notifications sent", str(sent_count))
+    table.add_row("Saved to database", str(saved_count))
     table.add_row("Errors",            str(len(errors) + len(fetch_errors)))
     table.add_row("Elapsed",           f"{elapsed:.1f}s")
     console.print(table)
@@ -218,19 +209,7 @@ def main(progress_callback=None) -> dict:
     if errors:
         logger.warning("Failed jobs: %s", ", ".join(errors))
 
-    # Send a summary to Telegram if no individual alerts were sent
-    if sent_count == 0 and not errors and telegram_enabled:
-        try:
-            from src.telegram_bot import send_text
-            send_text(
-                "📭 <b>Job Search Run Complete</b>\n"
-                f"No new matching jobs found in this scan.\n"
-                f"({len(raw_jobs)} total scraped, {len(filtered_jobs)} passed filters, all already seen)"
-            )
-        except Exception:
-            pass
-
-    logger.info("✅ Done! Sent %d new job alerts in %.1fs.", sent_count, elapsed)
+    logger.info("✅ Done! Saved %d new jobs in %.1fs.", saved_count, elapsed)
     return {
         "raw_count": len(raw_jobs),
         "passed_count": len(filtered_jobs),

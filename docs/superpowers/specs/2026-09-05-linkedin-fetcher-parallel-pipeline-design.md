@@ -260,4 +260,4 @@ python-jobspy>=1.1.0
 - No applicant insights/demographics scraping
 - No browser automation or Playwright
 - No proxy configuration (can be added later if rate limits become an issue)
-- No changes to dashboard UI, filters, Telegram, or Sheets integration
+- No changes to dashboard UI, filters, or Sheets integration

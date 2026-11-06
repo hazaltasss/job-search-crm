@@ -60,7 +60,7 @@ def extract_top_companies(days: int = 30) -> list[tuple[str, int]]:
 
 # ─── Stats Summary ─────────────────────────────────────────────────────────────
 def build_stats_message() -> str:
-    """Build the /stats Telegram message."""
+    """Build the overall job search stats summary message."""
     stats = database.get_stats()
     total = sum(stats.values())
 
@@ -103,7 +103,7 @@ def build_stats_message() -> str:
 
 # ─── Weekly Report ─────────────────────────────────────────────────────────────
 def build_weekly_report() -> str:
-    """Build the Monday weekly digest Telegram message."""
+    """Build the Monday weekly digest message."""
     stats = database.get_stats()
     total = sum(stats.values())
     applied = stats.get("applied", 0)

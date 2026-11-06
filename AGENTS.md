@@ -34,8 +34,7 @@ The project is an autonomous job discovery, application optimization, and person
 │   └── jobs.db                # SQLite database (auto-generated, gitignored)
 ├── scripts/
 │   ├── __init__.py
-│   ├── run_pipeline.py        # Primary fetch, filter, dedup & notify orchestration
-│   ├── bot_server.py          # Long-polling Telegram bot listener for inline callbacks
+│   ├── run_pipeline.py        # Primary fetch, filter, dedup & store orchestration
 │   ├── weekly_report.py       # Weekly analytics digest generator (Monday cron)
 │   └── seed_demo_data.py      # Demo data generator for local UI testing
 ├── src/
@@ -48,7 +47,6 @@ The project is an autonomous job discovery, application optimization, and person
 │   ├── ai_assistant.py        # Gemini API: Cover Letter, ATS CV Tailor, Follow-up Email
 │   ├── email_tracker.py       # Gmail IMAP SSL client & Gemini email classifier
 │   ├── analytics.py           # Skill aggregation & reporting helpers
-│   ├── telegram_bot.py        # Telegram alert notifications & inline keyboard buttons
 │   ├── sheets.py              # Google Sheets API live sync
 │   └── fetchers/
 │       ├── __init__.py

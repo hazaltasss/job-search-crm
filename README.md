@@ -36,10 +36,9 @@ Built with **Python**, **Streamlit**, **SQLite**, and **Google Gemini AI (`gemin
 - **Gemini Email Classifier:** Accurately categorizes recruiter emails into `INTERVIEW`, `ASSESSMENT`, `REJECTED`, or `RECEIVED`, linking them back to the company in SQLite.
 - **Interactive Email Simulator:** Test any recruiter email or test notification with pre-loaded samples (Bain, Personio, Delivery Hero) even without connecting a Gmail account.
 
-### 5. 📲 Telegram Bot & Google Sheets Sync
-- **Instant Telegram Alerts:** Delivers formatted alerts for new high-match jobs with 5 inline interactive buttons (`Applied`, `Skip`, `Save`, `Cover Letter`, `Tailor CV`).
-- **Google Sheets CRM:** Automatically synchronizes application statuses in real-time.
-- **Automated GitHub Actions:** Scheduled workflows run twice daily (09:00 & 18:00 CET).
+### 5. ☁️ Google Sheets Sync & Automated Pipelines
+- **Google Sheets CRM:** Optionally synchronizes application statuses in real-time.
+- **Automated GitHub Actions:** Scheduled workflows run twice daily (09:00 & 18:00 CET) to ingest and cache fresh jobs.
 
 ---
 
@@ -59,8 +58,7 @@ Built with **Python**, **Streamlit**, **SQLite**, and **Google Gemini AI (`gemin
 │   └── jobs.db                # SQLite database (auto-generated, gitignored)
 ├── scripts/
 │   ├── __init__.py
-│   ├── run_pipeline.py        # Primary fetch, filter, dedup & notify pipeline
-│   ├── bot_server.py          # Long-polling Telegram bot listener for inline callbacks
+│   ├── run_pipeline.py        # Primary fetch, filter, dedup & store pipeline
 │   ├── weekly_report.py       # Weekly analytics digest generator (Monday cron)
 │   └── seed_demo_data.py      # Demo data generator for local UI testing
 └── src/
@@ -72,7 +70,6 @@ Built with **Python**, **Streamlit**, **SQLite**, and **Google Gemini AI (`gemin
     ├── ai_assistant.py        # Gemini cover letter, CV tailor & follow-up generator
     ├── email_tracker.py       # Gmail IMAP sync & Gemini email classifier
     ├── analytics.py           # Skill aggregation & reporting helpers
-    ├── telegram_bot.py        # Telegram notification sender & button handlers
     ├── sheets.py              # Google Sheets API live sync
     └── fetchers/              # Scraper implementations
         ├── arbeitnow.py       # Arbeitnow API fetcher
@@ -120,10 +117,6 @@ GEMINI_API_KEY=AIzaSy...
 GMAIL_USER=your_email@gmail.com
 GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
 
-# Telegram Notifications (Optional — for mobile push alerts)
-TELEGRAM_BOT_TOKEN=7123456789:AAFxxxxxxxxxx
-TELEGRAM_CHAT_ID=123456789
-
 # Google Sheets CRM (Optional — for cloud spreadsheet sync)
 GOOGLE_SHEET_ID=your_spreadsheet_id_here
 GOOGLE_SERVICE_ACCOUNT_JSON=service_account.json
@@ -151,13 +144,7 @@ python scripts/run_pipeline.py
 ```
 Scrapes all configured sources, applies the strict English filter, deduplicates, and saves new listings to `data/jobs.db`.
 
-### 3. Start the Telegram Bot Listener (Optional)
-```bash
-python scripts/bot_server.py
-```
-Runs the interactive Telegram bot to handle button clicks (`Applied`, `Cover Letter`, `Tailor CV`) directly from mobile alerts.
-
-### 4. Seed Demo Data for Testing (Optional)
+### 3. Seed Demo Data for Testing (Optional)
 ```bash
 python scripts/seed_demo_data.py
 ```

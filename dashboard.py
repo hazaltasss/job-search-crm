@@ -32,9 +32,8 @@ try:
 except ImportError:
     pass  # dotenv not installed yet; env vars must be set manually
 
-# Set placeholder values for vars the dashboard doesn't actually need —
-# they will be validated properly when Telegram/Sheets functions are called.
-for _var in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "GOOGLE_SHEET_ID"]:
+# Set placeholder values for optional integrations the dashboard doesn't strictly require —
+for _var in ["GOOGLE_SHEET_ID"]:
     if not os.getenv(_var):
         os.environ[_var] = "__not_configured__"
 

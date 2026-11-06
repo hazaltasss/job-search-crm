@@ -23,10 +23,10 @@ graph TD
 
     subgraph Data_Layer["🗄️ Persistence & Storage"]
         DB[("SQLite: jobs.db<br/>• Full job metadata<br/>• Applied timestamps<br/>• Email sync notes")]
-        CV["data/master_cv.json<br/>(Hazal Taş Profile)"]
+        CV["data/master_cv.json<br/>(Candidate Profile)"]
     end
 
-    subgraph AI_Intelligence["🧠 AI Intelligence Services (gemini-3.6-flash)"]
+    subgraph AI_Intelligence["🧠 AI Intelligence Services (gemini-3.8-flash)"]
         AI1["Skill Gap & Score Analyzer"]
         AI2["ATS CV Restructuring Generator"]
         AI3["Personalized Cover Letter Engine"]
@@ -35,9 +35,10 @@ graph TD
     end
 
     subgraph Application_UI["🖥️ Streamlit CRM Dashboard (dashboard.py)"]
-        TAB1["📊 Tab 1: Market Intelligence<br/>(In-Demand Skills & Top Companies)"]
-        TAB2["🎯 Tab 2: Job Matcher & Optimizer<br/>(Score, Gap Analysis, CV/Cover Letter)"]
-        TAB3["📬 Tab 3: CRM Follow-Up & Gmail Hub<br/>(7-Day Tracker, Mailto, Sync)"]
+        TAB1["🎯 Tab 1: Job Matcher & Applications<br/>(Score, Gap Analysis, CV/Cover Letter)"]
+        TAB2["📊 Tab 2: Market Intelligence<br/>(In-Demand Skills & Top Companies)"]
+        TAB3["🧭 Tab 3: Career Roadmap & Strategy<br/>(Benchmarks & Portfolio Blueprints)"]
+        TAB4["📬 Tab 4: Application CRM & Email Hub<br/>(7-Day Tracker, Mailto, Sync)"]
     end
 
     subgraph Sync_Channels["📡 Notification & External Channels"]
@@ -66,7 +67,8 @@ graph TD
 ## 2. Core Subsystems & Components
 
 ### 2.1 Data Ingestion & Scrapers (`src/fetchers/`)
-The system queries 9 diverse job platforms and company ATS portals concurrently:
+The system queries 10 diverse job platforms and company ATS portals concurrently:
+- **`indeed.py`**: Direct Indeed Germany fetcher using python-jobspy, querying Berlin working student and internship roles across Data, AI, and Software domains.
 - **`greenhouse.py`**: Direct REST API client for 20+ top Berlin & German tech companies (HelloFresh, SumUp, N26, GetYourGuide, Celonis, Solaris, Raisin, etc.).
 - **`personio.py`**: XML syndication fetcher for leading Berlin startups and scaleups using Personio ATS (Taxfix, Sennder, Tourlane, Clue, Y42, Deepset, Parloa, etc.).
 - **`berlinstartupjobs.py`**: RSS feed parser for Berlin's local startup ecosystem tech and internship roles.
@@ -134,7 +136,7 @@ stateDiagram-v2
 
 ## 3. AI Services & Prompt Architecture (`src/ai_assistant.py`, `src/email_tracker.py`)
 
-All AI capabilities use **`gemini-3.6-flash`** for minimal latency and high parsing accuracy.
+All AI capabilities use **`gemini-3.8-flash`** (with automatic model fallback) for minimal latency and high parsing accuracy.
 
 ### 3.1 Skill Gap & Match Analysis (`src/match_analyzer.py`)
 - Analyzes candidate profile (`data/master_cv.json`) against the scraped job description.

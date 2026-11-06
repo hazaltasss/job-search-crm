@@ -1,11 +1,9 @@
 """
 Arbeitnow.com Job Board API fetcher.
 
-HiringCafe'nin yerine kullanılır — Arbeitnow ücretsiz, public, key gerektirmeyen
-bir API sunar ve tam iş ilanı açıklamaları döner.
-
-API: GET https://www.arbeitnow.com/api/job-board-api?page=N
-Dökümantasyon: https://www.arbeitnow.com/post/job-board-api
+Fetches European & German tech jobs with free public API access.
+Endpoint: GET https://www.arbeitnow.com/api/job-board-api?page=N
+Docs: https://www.arbeitnow.com/post/job-board-api
 """
 from __future__ import annotations
 import logging
@@ -28,13 +26,13 @@ _HEADERS = {
     "Accept": "application/json",
 }
 
-# Werkstudent / Intern için arama terimleri (title filtering)
+# Working Student / Intern keywords for title and tag pre-filtering
 _POSITION_KEYWORDS = [
     "working student", "werkstudent", "intern", "internship",
     "praktikant", "praktikum", "studentische", "student assistant",
 ]
 
-# Berlin / Remote Germany filtresi
+# Berlin and Remote Germany location filter
 _LOCATION_KEYWORDS = ["berlin", "remote", "germany", "deutschland"]
 
 
@@ -43,13 +41,13 @@ def _make_job_id(slug: str) -> str:
 
 
 def _is_relevant_position(title: str, tags: list[str]) -> bool:
-    """Sadece Werkstudent/Intern pozisyonları kabul et."""
+    """Accept only Working Student and Intern positions."""
     text = title.lower() + " " + " ".join(t.lower() for t in tags)
     return any(kw in text for kw in _POSITION_KEYWORDS)
 
 
 def _is_relevant_location(location: str, is_remote: bool) -> bool:
-    """Berlin veya Remote Germany ilanlarını kabul et."""
+    """Accept Berlin or Remote Germany listings."""
     if is_remote:
         return True
     loc = location.lower()
@@ -66,7 +64,15 @@ def _parse_job(raw: dict) -> Job | None:
         desc     = raw.get("description", "")
         tags     = raw.get("tags", [])
         remote   = bool(raw.get("remote", False))
-        created  = str(raw.get("created_at", ""))
+        created_val = raw.get("created_at")
+        posted_at = ""
+        if isinstance(created_val, (int, float)) or (isinstance(created_val, str) and created_val.isdigit() and len(created_val) >= 9):
+            try:
+                posted_at = datetime.fromtimestamp(int(created_val), tz=timezone.utc).strftime("%Y-%m-%d")
+            except Exception:
+                posted_at = str(created_val)[:10]
+        elif created_val:
+            posted_at = str(created_val)[:10]
 
         if not url or not title:
             return None
@@ -87,7 +93,7 @@ def _parse_job(raw: dict) -> Job | None:
             location=location if location else ("Remote, Germany" if remote else "Germany"),
             url=url,
             description=desc,
-            posted_at=created[:10] if created else "",
+            posted_at=posted_at,
             fetched_at=datetime.now(timezone.utc).isoformat(),
             is_remote=remote,
         )

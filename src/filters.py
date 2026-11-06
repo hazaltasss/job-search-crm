@@ -1,14 +1,14 @@
 """
 Filter pipeline: location, position type, language, and tech-category matching.
 
-Pipeline sırası (her biri başarısız olursa job atlanır):
-  1. Location   → Berlin (her mod) VEYA Germany-wide Remote
-  2. PositionType → Sadece Working Student / Werkstudent VEYA Intern / Praktikant
-  3. Language   → Adım 3a: Almanca zorunluluğu varsa HARD REJECT
-                  Adım 3b: İngilizce ortam/şartı varsa ACCEPT
-                  Adım 3c: Heuristik → listing metninin dil tespiti
-  4. Category   → Sadece teknoloji/yazılım odaklı (Data&AI, Software&IT, Business Tech)
-                  Minimum 30 puan skor gerekli
+Pipeline evaluation order (job is skipped if any stage fails):
+  1. Location     → Berlin (any mode) OR Germany-wide Remote
+  2. PositionType → Working Student (Werkstudent) OR Intern (Praktikant) only
+  3. Language     → Step 3a: HARD REJECT if German is mandatory
+                    Step 3b: ACCEPT if English environment/requirement detected
+                    Step 3c: Heuristic language ratio check
+  4. Category     → Tech-focused roles (Data&AI, Software&IT, QA&Testing, IT Support, Tech Ops)
+                    Minimum match score required (MIN_MATCH_SCORE = 30)
 """
 from __future__ import annotations
 import logging
@@ -19,6 +19,11 @@ from src.models import Job
 from src.config import (
     BERLIN_KEYWORDS,
     REMOTE_KEYWORDS,
+    LOCATION_REMOTE_KEYWORDS,
+    FULL_REMOTE_PATTERNS,
+    ONSITE_HYBRID_SIGNALS,
+    NON_BERLIN_CITIES,
+    NON_BERLIN_OFFICE_PATTERNS,
     ENGLISH_KEYWORDS,
     GERMAN_MANDATORY_PATTERNS,
     GERMAN_OPTIONAL_PATTERNS,
@@ -43,6 +48,16 @@ _WORKING_STUDENT_RE = [
 _INTERN_RE = [
     re.compile(p, re.IGNORECASE) for p in INTERN_PATTERNS
 ]
+_FULL_REMOTE_RE = [
+    re.compile(p, re.IGNORECASE) for p in FULL_REMOTE_PATTERNS
+]
+_ONSITE_HYBRID_RE = [
+    re.compile(p, re.IGNORECASE) for p in ONSITE_HYBRID_SIGNALS
+]
+_NON_BERLIN_OFFICE_RE = re.compile(
+    "|".join(NON_BERLIN_OFFICE_PATTERNS), re.IGNORECASE
+)
+_BERLIN_POSTCODE_RE = re.compile(r"\b1[0-4]\d{3}\b")
 
 # German function words used for heuristic language detection
 _GERMAN_FUNCTION_WORDS = frozenset({
@@ -65,19 +80,73 @@ def _text(*parts: str) -> str:
 def _check_location(job: Job) -> tuple[bool, bool, bool]:
     """
     Returns (passes, is_berlin, is_remote).
-    Passes if:
-      - Location mentions Berlin (any work mode), OR
-      - Position is fully remote / Germany-wide
+
+    Strict Location Rules:
+      1. Berlin (onsite, hybrid, or remote in Berlin):
+         PASSES only if it does NOT mandate office attendance/residency in another city (e.g. Munich, Hamburg, Frankfurt).
+      2. Non-Berlin German City (e.g. Hamburg, Munich, Frankfurt, Stuttgart):
+         REJECTS if it requires hybrid/onsite presence or fails explicit 100% full-remote verification.
+      3. Germany-wide / General Remote (e.g. location="Remote, Germany"):
+         PASSES if it explicitly declares remote and does NOT require physical attendance in a non-Berlin office.
     """
-    loc_lower = job.location.lower()
+    loc_lower = (job.location or "").lower()
+    title_lower = (job.title or "").lower()
     desc_lower = (job.description or "").lower()
-    title_lower = job.title.lower()
-    combined = f"{loc_lower} {title_lower} {desc_lower}"
 
-    is_remote = any(kw in combined for kw in REMOTE_KEYWORDS)
-    is_berlin = any(kw in loc_lower for kw in BERLIN_KEYWORDS)
+    # 0. Check for explicit non-Berlin office or residency mandates in description
+    has_non_berlin_office_mandate = bool(_NON_BERLIN_OFFICE_RE.search(desc_lower))
+    requires_onsite_or_hybrid = any(p.search(desc_lower) for p in _ONSITE_HYBRID_RE)
 
-    return (is_berlin or is_remote), is_berlin, is_remote
+    full_text = f"{loc_lower} {title_lower} {desc_lower}"
+    is_strictly_full_remote = any(p.search(full_text) for p in _FULL_REMOTE_RE)
+
+    # 1. Berlin check
+    is_berlin = (
+        any(kw in loc_lower for kw in BERLIN_KEYWORDS)
+        or "berlin" in title_lower
+        or bool(_BERLIN_POSTCODE_RE.search(loc_lower))
+    )
+    if is_berlin:
+        # Cross-validation: If scraper tagged it as Berlin, but:
+        # a) Neither title nor description mentions 'berlin', AND
+        # b) Title, description, or URL mentions a non-Berlin German city (e.g. Stuttgart, Munich, Frankfurt), AND
+        # c) The position is not confirmed 100% full remote:
+        # -> REJECT: It is a false Berlin claim from a multi-city or mislabeled listing.
+        berlin_in_text = "berlin" in title_lower or "berlin" in desc_lower
+        has_other_city = any(
+            re.search(r"\b" + re.escape(c) + r"\b", f"{title_lower} {desc_lower} {(job.url or '').lower()}")
+            for c in NON_BERLIN_CITIES
+        )
+        if not berlin_in_text and has_other_city and not is_strictly_full_remote:
+            logger.debug(
+                "Rejected false Berlin tag: non-Berlin city found and Berlin absent in text: %s",
+                job.title,
+            )
+            return False, False, False
+
+        # If scraper tagged it as Berlin, but description demands an office in Munich/Hamburg/etc:
+        if has_non_berlin_office_mandate and not is_strictly_full_remote:
+            logger.debug("Rejected Berlin-tagged job with non-Berlin office mandate: %s", job.title)
+            return False, False, False
+        is_remote_mode = any(kw in loc_lower or kw in title_lower for kw in LOCATION_REMOTE_KEYWORDS) or is_strictly_full_remote
+        return True, True, is_remote_mode
+
+    # 2. Check if a specific non-Berlin physical city is named in location
+    has_non_berlin_city = any(city in loc_lower for city in NON_BERLIN_CITIES)
+
+    if has_non_berlin_city:
+        # Hamburg, Munich, Stuttgart, etc.: ONLY pass if confirmed 100% full remote AND no office mandate
+        if is_strictly_full_remote and not requires_onsite_or_hybrid and not has_non_berlin_office_mandate:
+            return True, False, True
+        # Otherwise: onsite/hybrid in another city -> strictly REJECT
+        return False, False, False
+
+    # 3. Non-specific city (e.g. location="Remote", "Deutschlandweit", "Germany")
+    is_location_remote = any(kw in loc_lower for kw in LOCATION_REMOTE_KEYWORDS) or "remote" in title_lower
+    if (is_location_remote or is_strictly_full_remote) and not requires_onsite_or_hybrid and not has_non_berlin_office_mandate:
+        return True, False, True
+
+    return False, False, False
 
 
 # ─── Filter Step 2: Position Type ────────────────────────────────────────────

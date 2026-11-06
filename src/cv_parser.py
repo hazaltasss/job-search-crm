@@ -13,7 +13,7 @@ from docx import Document
 import pypdf
 
 from src.config import GEMINI_API_KEY
-from src.ai_assistant import extract_json_from_text
+from src.ai_assistant import extract_json_from_text, generate_content_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -212,9 +212,6 @@ def parse_cv_with_gemini(raw_text: str) -> dict:
     if not GEMINI_API_KEY:
         raise EnvironmentError("GEMINI_API_KEY is not configured.")
 
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-3.6-flash")
-
     prompt = _PARSE_CV_PROMPT.format(raw_text=raw_text[:6000])
 
     try:
@@ -223,10 +220,10 @@ def parse_cv_with_gemini(raw_text: str) -> dict:
             max_output_tokens=4096,
             response_mime_type="application/json",
         )
-        response = model.generate_content(prompt, generation_config=config)
+        response = generate_content_with_fallback(prompt, generation_config=config)
     except Exception as exc:
         logger.warning("Gemini parse with application/json failed (%s), using fallback config", exc)
-        response = model.generate_content(prompt)
+        response = generate_content_with_fallback(prompt)
 
     raw_json_str = response.text.strip() if (response and response.text) else "{}"
     parsed = extract_json_from_text(raw_json_str)

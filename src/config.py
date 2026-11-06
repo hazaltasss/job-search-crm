@@ -11,6 +11,15 @@ try:
 except ImportError:
     _ROOT = Path(__file__).resolve().parent.parent
 
+import socket
+# Force IPv4 socket resolution globally to eliminate macOS / local ISP IPv6 SYN_SENT packet timeouts
+_orig_getaddrinfo = socket.getaddrinfo
+
+def _getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
+    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+socket.getaddrinfo = _getaddrinfo_ipv4
+
 
 # ─── Required Secrets ─────────────────────────────────────────────────────────
 def _require(key: str) -> str:
@@ -63,22 +72,90 @@ OUTPUT_DIR: Path = _ROOT / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 (DB_PATH.parent).mkdir(exist_ok=True)
 
-# ─── Filter: Location Keywords ────────────────────────────────────────────────
-BERLIN_KEYWORDS = [
-    "berlin",
-    "10",      # Berlin postcodes start with 1
+# ─── Configurable Target Preferences (Tunable via .env) ──────────────────────
+TARGET_LOCATIONS: list[str] = [
+    loc.strip()
+    for loc in os.getenv("TARGET_LOCATIONS", "Berlin, Remote").split(",")
+    if loc.strip()
 ]
 
-REMOTE_KEYWORDS = [
+TARGET_JOB_TYPES: list[str] = [
+    t.strip()
+    for t in os.getenv("TARGET_JOB_TYPES", "working student, internship").split(",")
+    if t.strip()
+]
+
+TARGET_SEARCH_KEYWORDS: list[str] = [
+    k.strip()
+    for k in os.getenv(
+        "TARGET_SEARCH_KEYWORDS",
+        "working student, werkstudent, working student software, working student data, working student ai, working student qa, working student test, working student support, working student it, werkstudent it, werkstudent software, werkstudent qa, werkstudent test, werkstudent support, internship software, internship data, internship qa, internship it",
+    ).split(",")
+    if k.strip()
+]
+
+# ─── Filter: Location Keywords & City Rules ───────────────────────────────────
+BERLIN_KEYWORDS = [
+    "berlin",
+]
+
+# Genuine remote signals in location field
+LOCATION_REMOTE_KEYWORDS = [
     "remote",
-    "home office",
-    "homeoffice",
-    "home-office",
-    "anywhere",
     "bundesweit",
     "deutschlandweit",
+    "anywhere",
     "full remote",
     "fully remote",
+]
+
+# Backward compatibility alias
+REMOTE_KEYWORDS = LOCATION_REMOTE_KEYWORDS
+
+# Explicit full-remote patterns required when a job is outside Berlin
+FULL_REMOTE_PATTERNS: list[str] = [
+    r"\b100%\s*remote\b",
+    r"\bfull(?:y)?\s*remote\b",
+    r"\bvollständig\s*remote\b",
+    r"\bpermanent\s*remote\b",
+    r"\bwork\s+from\s+anywhere\b",
+    r"\bremote\s+in\s+germany\b",
+    r"\bremote\s+(?:across|within)\s+germany\b",
+    r"\b100%\s*home\s*office\b",
+]
+
+# Onsite / hybrid signals that require physical presence in non-Berlin offices
+ONSITE_HYBRID_SIGNALS: list[str] = [
+    r"\bhybrid\b",
+    r"\bvor\s*ort\b",
+    r"\bon-?site\b",
+    r"\bpräsenz\b",
+    r"\bim\s*büro\b",
+    r"\bin\s+our\s+office\b",
+    r"\bin\s+unserem\s+büro\b",
+    r"\btage\s+(?:pro\s+woche\s+)?im\s+büro\b",
+    r"\bdays?\s+(?:per\s+week\s+)?in\s+(?:the\s+)?office\b",
+    r"\boffice\s+presence\b",
+    r"\bregelmäßig\s+im\s+büro\b",
+    r"\bstandort\s+(?:in\s+)?(?:hamburg|münchen|munich|köln|cologne|frankfurt|stuttgart|düsseldorf|essen|dortmund|hannover|leipzig)\b",
+]
+
+# Major German physical cities and regions outside Berlin
+NON_BERLIN_CITIES: list[str] = [
+    "hamburg", "buxtehude", "münchen", "munich", "köln", "cologne", "frankfurt",
+    "stuttgart", "düsseldorf", "dusseldorf", "leipzig", "dresden",
+    "hannover", "hanover", "nürnberg", "nuremberg", "essen", "bremen",
+    "dortmund", "bonn", "karlsruhe", "mannheim", "augsburg", "wiesbaden",
+    "aachen", "kiel", "freiburg", "mainz", "rostock", "ulm", "regensburg",
+    "würzburg", "wolfsburg", "darmstadt", "heidelberg", "erlangen", "ingolstadt",
+    "lohne", "lüneburg", "gütersloh", "walldorf", "potsdam", "grünheide",
+]
+
+# Patterns detecting office mandates or mandatory residency in a non-Berlin city
+NON_BERLIN_OFFICE_PATTERNS: list[str] = [
+    r"\b(?:standort(?:\s+ist)?|arbeitsort(?:\s+ist)?|office|headquarters|hq|center|site)\s*(?:ist\s+|in\s+|:\s*|\n\s*|\s)+(?:hamburg|münchen|munich|frankfurt|köln|cologne|stuttgart|düsseldorf|essen|dortmund|hannover|leipzig|nürnberg|nuremberg|bremen|dresden|karlsruhe|mannheim|augsburg|bonn|lohne|lüneburg|ingolstadt|erlangen)\b",
+    r"\b(?:based in|located in|living in|reside in|wohnsitz in|come to the office in|presence in|präsenz in|tage im büro in)\s+(?:our\s+office\s+in\s+|unserem\s+büro\s+in\s+|the\s+office\s+in\s+)?(?:hamburg|münchen|munich|frankfurt(?:\s+am\s+main)?|köln|cologne|stuttgart|düsseldorf|essen|dortmund|hannover|leipzig|nürnberg|nuremberg|lohne|lüneburg)\b",
+    r"\b(?:münchen|munich|hamburg|frankfurt|köln|cologne|stuttgart|düsseldorf|nürnberg)\s+(?:office|hub|location)\s+(?:only|required|mandatory)\b",
 ]
 
 # ─── Filter: Language — HARD REJECT patterns (regex, case-insensitive) ─────────
@@ -157,6 +234,8 @@ WORKING_STUDENT_PATTERNS: list[str] = [
     r"\bstudentische\s+hilfskraft\b",
     r"\bstud\.\s*hilfskraft\b",
     r"\bstudent\s+assistant\b",
+    r"\bstudentische\w*\b",
+    r"\bstudent\s+(?:worker|aide|job|developer|analyst|tester|support|assistant)\b",
 ]
 
 INTERN_PATTERNS: list[str] = [
@@ -178,6 +257,8 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "data engineering", "data engineer", "etl", "data pipeline",
         "spark", "airflow", "data warehouse", "snowflake", "bigquery",
         "databricks", "mlops", "model training", "feature engineering",
+        "data quality", "data annotation", "data labeling", "data cleaning",
+        "prompt engineering", "ai evaluation",
     ],
     "Software & IT": [
         "software engineer", "software developer", "software development",
@@ -189,18 +270,37 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "cloud", "aws", "azure", "gcp", "google cloud",
         "devops", "kubernetes", "docker", "terraform", "ci/cd",
         "cybersecurity", "information security", "penetration testing",
-        "qa ", "quality assurance", "test automation", "selenium",
         "embedded", "c++", "rust", "golang", "go ", "kotlin", "swift",
         "mobile developer", "android", "ios", "flutter",
         "api development", "microservices", "rest api",
         "linux", "system programming", "networking",
     ],
-    "Business Tech": [
+    "QA & Testing": [
+        "qa", "qa engineer", "qa tester", "quality assurance",
+        "software tester", "software testing", "test automation",
+        "test engineer", "test automation engineer", "manual testing",
+        "test case", "test cases", "test execution", "bug reporting",
+        "bug tracking", "postman", "api testing", "swagger", "cypress",
+        "playwright", "selenium", "pytest", "unit testing", "regression testing",
+        "integration testing", "performance testing", "load testing",
+    ],
+    "IT & Technical Support": [
+        "tech support", "technical support", "it support", "application support",
+        "app support", "helpdesk", "it helpdesk", "technical customer support",
+        "saas support", "tier 1", "tier 2", "desktop support", "it specialist",
+        "it assistant", "system administrator", "sysadmin", "support engineer",
+        "customer solutions", "customer support engineer", "technical operations",
+        "troubleshooting", "service desk",
+    ],
+    "Tech Ops & Business Tech": [
         "product manager", "product owner", "product management",
         "business analyst", "business analysis",
         "it project manager", "it project", "it consultant",
         "tech consulting", "digital transformation",
         "scrum master", "agile coach",
+        "tech operations", "tech ops", "product operations", "prodops",
+        "crm operations", "crm manager", "hubspot", "salesforce",
+        "process automation", "zapier", "make.com",
     ],
 }
 

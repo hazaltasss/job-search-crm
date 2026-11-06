@@ -7,6 +7,8 @@ Scrapes working student and internship postings in Berlin.
 3. Fetches the full job description from the detail page (JSON-LD JobPosting) for matched cards.
 """
 from __future__ import annotations
+import os
+import re
 import asyncio
 import json
 import logging
@@ -25,10 +27,9 @@ logger = logging.getLogger(__name__)
 
 _BASE = "https://www.workingstudentjobs.de"
 
-# Listing pages to scan — specifically targeting Tech & Engineering
+# Listing pages to scan — specifically targeting Berlin Tech & Student listings
 _TARGET_PAGES = [
     f"{_BASE}/jobs/in/berlin?field=tech",
-    f"{_BASE}/?field=tech",
     f"{_BASE}/jobs/in/berlin",
 ]
 
@@ -56,8 +57,9 @@ def _get_page(client: httpx.Client, url: str) -> BeautifulSoup | None:
     return BeautifulSoup(resp.text, "lxml")
 
 
-def _parse_description_from_html(html: str) -> str:
-    """Extract description from JSON-LD JobPosting inside page HTML."""
+def _parse_detail_from_html(html: str) -> dict:
+    """Extract description and locality from JSON-LD JobPosting inside page HTML."""
+    res = {"description": "", "location": ""}
     try:
         soup = BeautifulSoup(html, "lxml")
         for s in soup.find_all("script", type="application/ld+json"):
@@ -66,12 +68,29 @@ def _parse_description_from_html(html: str) -> str:
                 if data.get("@type") == "JobPosting":
                     desc = data.get("description", "")
                     if desc:
-                        return BeautifulSoup(desc, "lxml").get_text(separator="\n").strip()
+                        res["description"] = BeautifulSoup(desc, "lxml").get_text(separator="\n").strip()
+                    loc_data = data.get("jobLocation")
+                    if isinstance(loc_data, dict):
+                        addr = loc_data.get("address", {})
+                        if isinstance(addr, dict):
+                            loc = addr.get("addressLocality")
+                            if loc:
+                                res["location"] = loc.strip()
+                    elif isinstance(loc_data, list) and loc_data:
+                        first = loc_data[0]
+                        if isinstance(first, dict):
+                            addr = first.get("address", {})
+                            if isinstance(addr, dict):
+                                loc = addr.get("addressLocality")
+                                if loc:
+                                    res["location"] = loc.strip()
+                    if res["description"]:
+                        return res
             except Exception:
                 continue
     except Exception as exc:
-        logger.debug("Failed parsing description from HTML: %s", exc)
-    return ""
+        logger.debug("Failed parsing detail from HTML: %s", exc)
+    return res
 
 
 def _fetch_full_description(client: httpx.Client, job_url: str) -> str:
@@ -80,29 +99,28 @@ def _fetch_full_description(client: httpx.Client, job_url: str) -> str:
         soup = _get_page(client, job_url)
         if not soup:
             return ""
-        return _parse_description_from_html(str(soup))
+        return _parse_detail_from_html(str(soup))["description"]
     except Exception as exc:
         logger.debug("Failed to fetch full description for %s: %s", job_url, exc)
     return ""
 
 
-async def _fetch_descriptions_batch(urls: list[str], max_concurrent: int = 5) -> dict[str, str]:
-    """Fetch multiple detail pages concurrently with semaphore, returning {url: description}."""
+async def _fetch_details_batch(urls: list[str], max_concurrent: int = 8) -> dict[str, dict]:
+    """Fetch multiple detail pages concurrently with semaphore, returning {url: {'description': ..., 'location': ...}}."""
     sem = asyncio.Semaphore(max_concurrent)
-    results: dict[str, str] = {}
+    results: dict[str, dict] = {}
 
     async def _fetch_one(client: httpx.AsyncClient, url: str) -> None:
         async with sem:
             try:
-                resp = await client.get(url, headers=_HEADERS, timeout=REQUEST_TIMEOUT)
+                resp = await client.get(url, headers=_HEADERS, timeout=10)
                 if resp.status_code == 200:
-                    results[url] = _parse_description_from_html(resp.text)
+                    results[url] = _parse_detail_from_html(resp.text)
                 else:
-                    results[url] = ""
+                    results[url] = {"description": "", "location": ""}
             except Exception as exc:
                 logger.debug("Failed async fetch for %s: %s", url, exc)
-                results[url] = ""
-            await asyncio.sleep(0.1)  # Minimal politeness delay
+                results[url] = {"description": "", "location": ""}
 
     if not urls:
         return results
@@ -155,13 +173,33 @@ def _parse_card(card, now_iso: str) -> dict | None:
         ]
         chips_text = " ".join(chips)
 
-        # Location
-        location = "Berlin"
+        # Location from city button or chips
+        city = ""
+        btn = card.find("button", attrs={"aria-label": re.compile(r"popover for", re.I)})
+        if btn:
+            label = btn.get("aria-label", "")
+            m = re.search(r"popover for\s+([A-Za-zäöüÄÖÜß\s\-\/\(\)]+)", label, re.I)
+            if m:
+                city = m.group(1).strip()
+            if not city:
+                span = btn.find("span")
+                if span and span.get_text(strip=True):
+                    city = span.get_text(strip=True)
+
         is_remote = "remote" in chips_text.lower()
-        if is_remote and "berlin" not in chips_text.lower():
-            location = "Remote, Germany"
-        elif "berlin" in chips_text.lower():
-            location = "Berlin, Germany"
+        if not city:
+            if "berlin" in chips_text.lower():
+                city = "Berlin"
+            elif is_remote:
+                city = "Remote"
+
+        if city:
+            if is_remote and "berlin" not in city.lower():
+                location = f"{city}, Remote"
+            else:
+                location = f"{city}, Germany"
+        else:
+            location = "Remote, Germany" if is_remote else "Germany"
 
         # Language from chips
         # If chip is explicitly German only, mark language as German
@@ -183,23 +221,140 @@ def _parse_card(card, now_iso: str) -> dict | None:
         return None
 
 
-def fetch_jobs(max_pages: int = 3) -> list[Job]:
+def _fetch_with_playwright(max_pages: int = 2) -> list[Job]:
     """
-    Scrape WorkingStudentJobs.de for Berlin listings.
-    Phase 1: Collects job cards synchronously.
-    Phase 2: Concurrently fetches job descriptions via asyncio batching.
+    Scrapes WorkingStudentJobs.de using Playwright to seamlessly bypass Cloudflare Turnstile.
+    """
+    from playwright.sync_api import sync_playwright
+
+    candidate_cards: list[dict] = []
+    seen_urls: set[str] = set()
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    is_ci = bool(os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"))
+    launch_args = [
+        "--disable-blink-features=AutomationControlled",
+        "--window-size=1280,800",
+    ]
+    if is_ci:
+        launch_args.append("--no-sandbox")
+    else:
+        # Offscreen window satisfies Cloudflare Turnstile on macOS without popping up on screen
+        launch_args.append("--window-position=-2400,-2400")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=is_ci,
+            args=launch_args,
+        )
+        context = browser.new_context(
+            user_agent=USER_AGENT,
+            viewport={"width": 1280, "height": 800},
+        )
+        page = context.new_page()
+
+        for base_url in _TARGET_PAGES:
+            sep = "&" if "?" in base_url else "?"
+            for p_num in range(1, max_pages + 1):
+                page_url = base_url if p_num == 1 else f"{base_url}{sep}page={p_num}"
+                logger.info("WSJ (Playwright): scraping %s", page_url)
+                try:
+                    page.goto(page_url, wait_until="domcontentloaded", timeout=15000)
+                    try:
+                        page.wait_for_selector("article", timeout=10000)
+                    except Exception:
+                        pass
+                    soup = BeautifulSoup(page.content(), "html.parser")
+                    cards = soup.find_all("article")
+                    if not cards:
+                        break
+
+                    for card in cards:
+                        parsed = _parse_card(card, now_iso)
+                        if not parsed or parsed["url"] in seen_urls:
+                            continue
+                        if parsed["is_german_only"]:
+                            continue
+                        seen_urls.add(parsed["url"])
+                        candidate_cards.append(parsed)
+                except Exception as exc:
+                    logger.warning("WSJ page %s failed: %s", page_url, exc)
+                    break
+
+        logger.info("WSJ: %d candidate cards collected, fetching descriptions...", len(candidate_cards))
+
+        all_jobs: list[Job] = []
+        for parsed in candidate_cards:
+            desc = ""
+            loc_from_detail = ""
+            try:
+                page.goto(parsed["url"], wait_until="domcontentloaded", timeout=10000)
+                page.wait_for_timeout(600)
+                soup_d = BeautifulSoup(page.content(), "html.parser")
+                for s in soup_d.find_all("script", type="application/ld+json"):
+                    try:
+                        d = json.loads(s.string or "{}")
+                        if d.get("@type") == "JobPosting":
+                            if d.get("description"):
+                                desc = BeautifulSoup(d["description"], "html.parser").get_text("\n", strip=True)
+                            loc_data = d.get("jobLocation")
+                            if isinstance(loc_data, dict):
+                                loc_from_detail = loc_data.get("address", {}).get("addressLocality", "")
+                            elif isinstance(loc_data, list) and loc_data:
+                                loc_from_detail = loc_data[0].get("address", {}).get("addressLocality", "")
+                            if desc:
+                                break
+                    except Exception:
+                        continue
+                if not desc:
+                    prose = soup_d.find("div", class_="prose") or soup_d.find("main")
+                    if prose:
+                        desc = prose.get_text("\n", strip=True)
+            except Exception as e:
+                logger.debug("Failed detail fetch for %s: %s", parsed["url"], e)
+
+            if not desc:
+                desc = f"{parsed['title']} at {parsed['company']}. Tags: {', '.join(parsed['chips'])}"
+
+            final_location = parsed["location"]
+            if loc_from_detail:
+                final_location = f"{loc_from_detail.strip()}, Germany"
+
+            is_berlin = "berlin" in final_location.lower()
+
+            job = Job(
+                job_id=_make_job_id(parsed["url"]),
+                source="workingstudentjobs",
+                title=parsed["title"],
+                company=parsed["company"],
+                location=final_location,
+                url=parsed["url"],
+                description=desc,
+                language="en" if parsed["is_english"] else "unknown",
+                is_remote=parsed["is_remote"],
+                is_berlin=is_berlin,
+                fetched_at=now_iso,
+            )
+            all_jobs.append(job)
+
+        browser.close()
+        return all_jobs
+
+
+def _fetch_with_httpx(max_pages: int = 2) -> list[Job]:
+    """
+    Fallback HTTPX scraper for WorkingStudentJobs.de.
     """
     candidate_cards: list[dict] = []
     seen_urls: set[str] = set()
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    # Phase 1: Scan listing pages
     with httpx.Client(follow_redirects=True) as client:
         for base_url in _TARGET_PAGES:
             sep = "&" if "?" in base_url else "?"
             for page in range(1, max_pages + 1):
                 page_url = base_url if page == 1 else f"{base_url}{sep}page={page}"
-                logger.info("WSJ: scraping %s", page_url)
+                logger.info("WSJ (httpx): scraping %s", page_url)
 
                 soup = _get_page(client, page_url)
                 if not soup:
@@ -209,13 +364,14 @@ def fetch_jobs(max_pages: int = 3) -> list[Job]:
                 if not cards:
                     break
 
+                from src.database import is_duplicate
                 for card in cards:
                     parsed = _parse_card(card, now_iso)
                     if not parsed or parsed["url"] in seen_urls:
                         continue
-
-                    # If the card explicitly states "German" only, skip
                     if parsed["is_german_only"]:
+                        continue
+                    if is_duplicate(parsed["url"], title=parsed["title"], company=parsed["company"]):
                         continue
 
                     seen_urls.add(parsed["url"])
@@ -223,31 +379,58 @@ def fetch_jobs(max_pages: int = 3) -> list[Job]:
 
                 time.sleep(REQUEST_DELAY)
 
-    # Phase 2: Fetch full descriptions concurrently with asyncio
     urls_to_fetch = [c["url"] for c in candidate_cards]
-    logger.info("WSJ: Concurrently fetching descriptions for %d jobs...", len(urls_to_fetch))
-    descriptions_map = asyncio.run(_fetch_descriptions_batch(urls_to_fetch, max_concurrent=5))
+    details_map = asyncio.run(_fetch_details_batch(urls_to_fetch, max_concurrent=5))
 
     all_jobs: list[Job] = []
     for parsed in candidate_cards:
-        full_desc = descriptions_map.get(parsed["url"], "")
+        detail = details_map.get(parsed["url"], {})
+        full_desc = detail.get("description", "")
         if not full_desc:
             full_desc = f"{parsed['title']} at {parsed['company']}. Tags: {', '.join(parsed['chips'])}"
+
+        final_location = parsed["location"]
+        detail_loc = (detail.get("location") or "").strip()
+        if detail_loc:
+            final_location = f"{detail_loc}, Germany"
+
+        is_berlin = "berlin" in final_location.lower()
 
         job = Job(
             job_id=_make_job_id(parsed["url"]),
             source="workingstudentjobs",
             title=parsed["title"],
             company=parsed["company"],
-            location=parsed["location"],
+            location=final_location,
             url=parsed["url"],
             description=full_desc,
             language="en" if parsed["is_english"] else "unknown",
             is_remote=parsed["is_remote"],
-            is_berlin=True,
+            is_berlin=is_berlin,
             fetched_at=now_iso,
         )
         all_jobs.append(job)
 
-    logger.info("WorkingStudentJobs: %d relevant jobs fetched", len(all_jobs))
     return all_jobs
+
+
+def fetch_jobs(max_pages: int = 2) -> list[Job]:
+    """
+    Scrape WorkingStudentJobs.de for Berlin listings.
+    Uses fast HTTPX directly; falls back to Playwright only if HTTPX returns 0 jobs.
+    """
+    try:
+        jobs = _fetch_with_httpx(max_pages=max_pages)
+        if jobs:
+            logger.info("WorkingStudentJobs (httpx): %d relevant jobs fetched", len(jobs))
+            return jobs
+    except Exception as exc:
+        logger.warning("WorkingStudentJobs httpx fetch error: %s. Attempting Playwright...", exc)
+
+    try:
+        jobs = _fetch_with_playwright(max_pages=max_pages)
+        logger.info("WorkingStudentJobs (Playwright): %d relevant jobs fetched", len(jobs))
+        return jobs
+    except Exception as exc:
+        logger.warning("WorkingStudentJobs Playwright fallback also failed: %s", exc)
+        return []

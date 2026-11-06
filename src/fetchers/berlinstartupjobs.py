@@ -114,6 +114,22 @@ def parse_feed_xml(xml_content: str, is_internship_feed: bool = False) -> list[J
             company = company.strip()
             desc = _clean_html(raw_desc)
 
+            from src.database import is_duplicate
+            if is_duplicate(url, title=title, company=company):
+                continue
+
+            # If description is just an excerpt, fetch 100% full text from post URL
+            if "read more" in desc.lower() or len(desc) < 350:
+                try:
+                    from src.fetchers.extractor import extract_full_job
+                    full_info = extract_full_job(url)
+                    if full_info.get("description") and len(full_info["description"]) > len(desc):
+                        desc = full_info["description"]
+                        if not company or company == "Berlin Startup":
+                            company = full_info.get("company") or company
+                except Exception as ext_err:
+                    logger.debug("Could not fetch full post for %s: %s", url, ext_err)
+
             # Check relevance
             combined_text = f"{title.lower()} {' '.join(c.lower() for c in categories)} {desc[:300].lower()}"
             if not is_internship_feed and not any(kw in combined_text for kw in _POSITION_KEYWORDS):

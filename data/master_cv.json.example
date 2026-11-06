@@ -1,14 +1,14 @@
 {
   "personal": {
-    "name": "Hazal Taş",
-    "email": "hazaltas.623@gmail.com",
-    "phone": "+49 155 1098 2021",
+    "name": "Candidate Name",
+    "email": "candidate@example.com",
+    "phone": "+49 15X XXXX XXXX",
     "location": "Berlin, Germany",
-    "linkedin": "[LinkedIn Profile Link]",
-    "github": "[GitHub Profile Link]",
+    "linkedin": "https://www.linkedin.com/in/candidate",
+    "github": "https://github.com/candidate",
     "portfolio": ""
   },
-  "summary": "Computer Engineer and Master's student in Data Analytics & AI with practical software engineering experience at Softtech A.Ş. Specialized in designing Generative AI pipelines, Retrieval-Augmented Generation (RAG), and agentic workflows using modern LLM architectures and Python. Strong engineering foundation in asynchronous API development, database optimization, and end-to-end machine learning lifecycle management.",
+  "summary": "Computer Engineer and Master's student in Data Analytics & AI with practical software engineering, QA/testing, and systems experience. Strong engineering foundation in backend API development, RESTful integration testing (Postman, Swagger/OpenAPI), database optimization (SQL), and software quality assurance. Specialized in Generative AI pipelines, systematic technical troubleshooting, and building resilient software architectures.",
   "education": [
     {
       "degree": "Master of Science (M.Sc.)",
@@ -57,6 +57,7 @@
       "bullets": [
         "API & Backend Development: Engineered secure, scalable RESTful backend microservices using Java and Spring Boot to support high-throughput internal data workflows.",
         "API Testing & Documentation: Leveraged Postman and Swagger/OpenAPI to test, debug, and document REST endpoints and authentication flows, ensuring clean cross-platform integration.",
+        "Quality Assurance & Test Automation: Designed and executed structured test cases, validated REST API request/response payload schemas, tested edge-case error handling, and reported bugs in Jira.",
         "Data & Schema Optimization: Designed and indexed relational database schemas in MySQL, enhancing query latency and data integrity for master records.",
         "Cross-Platform Integration: Built responsive mobile client modules using Flutter, integrating them with backend APIs and structured JSON payloads."
       ]
@@ -126,6 +127,21 @@
       "CI/CD (GitHub Actions)",
       "Docker Basics",
       "Linux"
+    ],
+    "qa_and_testing": [
+      "API Testing (Postman, Swagger/OpenAPI)",
+      "Manual & Functional Testing",
+      "Test Case Design & Execution",
+      "Bug Tracking & Reporting (Jira)",
+      "Regression Testing",
+      "Python Unit Testing (pytest)"
+    ],
+    "it_and_technical_support": [
+      "Technical Troubleshooting & Diagnostics",
+      "RESTful API Debugging",
+      "SQL Querying & Verification",
+      "Linux / Bash",
+      "Log Analysis & Incident Triage"
     ],
     "core_competencies": [
       "Data Structures & Algorithms",

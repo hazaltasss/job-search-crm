@@ -2,7 +2,7 @@
 
 An AI-powered job search automation platform, skill gap optimizer, and personal application CRM tailored for **Berlin Working Student (*Werkstudent*) & Internship (*Praktikum*)** tech roles.
 
-Built with **Python**, **Streamlit**, **SQLite**, and **Google Gemini AI (`gemini-3.6-flash`)**.
+Built with **Python**, **Streamlit**, **SQLite**, and **Google Gemini AI (`gemini-3.8-flash`)**.
 
 ---
 
@@ -54,7 +54,8 @@ Built with **Python**, **Streamlit**, **SQLite**, and **Google Gemini AI (`gemin
 ├── AGENTS.md                  # Development guidelines for AI agents
 ├── architecture.md            # Detailed system design & architecture documentation
 ├── data/
-│   ├── master_cv.json         # Candidate master profile (Hazal Taş)
+│   ├── master_cv.json.example # Sanitized CV template
+│   ├── master_cv.json         # Candidate master profile (local, gitignored)
 │   └── jobs.db                # SQLite database (auto-generated, gitignored)
 ├── scripts/
 │   ├── __init__.py
@@ -102,11 +103,12 @@ source .venv/bin/activate    # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. Environment Configuration
+### 3. Profile & Environment Configuration
 
-Copy `.env.example` to `.env`:
+Copy `.env.example` to `.env` and create your local CV profile:
 ```bash
 cp .env.example .env
+cp data/master_cv.json.example data/master_cv.json
 ```
 
 Configure your `.env` variables:
@@ -136,9 +138,10 @@ GOOGLE_SERVICE_ACCOUNT_JSON=service_account.json
 streamlit run dashboard.py
 ```
 Open **`http://localhost:8501`** in your browser to access:
+- **🎯 Job Matcher & Applications:** Browse jobs, inspect skill gaps, optimize CV bullets, and generate cover letters with interactive Copilot chat.
 - **📊 Market Intelligence:** View top in-demand skills and hiring trends in Berlin.
-- **🎯 Job Matcher & AI Optimizer:** Browse jobs, inspect skill gaps, optimize CV bullets, and generate cover letters.
-- **📬 Başvuru Takip & E-posta Hub:** Monitor applications, generate 7-day follow-up emails, and sync/simulate recruiter emails.
+- **🧭 Career Roadmap & Strategy:** Deep-dive into technical benchmarks and portfolio blueprints.
+- **📬 Application CRM & Email Hub:** Monitor application pipelines, generate 7-day follow-up emails, and sync/classify recruiter emails.
 
 ### 2. Fetch Latest Jobs Manually
 ```bash

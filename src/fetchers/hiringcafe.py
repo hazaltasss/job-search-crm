@@ -54,9 +54,39 @@ _SEARCH_PAYLOADS = [
         },
     },
     {
+        "name": "Berlin – Working Student (QA, Testing & Support)",
+        "payload": {
+            "searchQuery": "working student QA testing test engineer technical support IT",
+            "locations": [
+                {"formatted_address": "Berlin, Germany", "types": ["locality"]}
+            ],
+            "workplaceTypes": ["Onsite", "Hybrid", "Remote"],
+            "roleYoeRange": [0, 2],
+            "dateFetchedPastNDays": 3,
+            "sortBy": "date_posted",
+            "page": 1,
+            "pageSize": 50,
+        },
+    },
+    {
         "name": "Berlin – Werkstudent (DE keyword)",
         "payload": {
             "searchQuery": "werkstudent software entwicklung data",
+            "locations": [
+                {"formatted_address": "Berlin, Germany", "types": ["locality"]}
+            ],
+            "workplaceTypes": ["Onsite", "Hybrid", "Remote"],
+            "roleYoeRange": [0, 2],
+            "dateFetchedPastNDays": 3,
+            "sortBy": "date_posted",
+            "page": 1,
+            "pageSize": 50,
+        },
+    },
+    {
+        "name": "Berlin – Werkstudent (QA, Test & Support DE)",
+        "payload": {
+            "searchQuery": "werkstudent QA test testing support IT helpdesk",
             "locations": [
                 {"formatted_address": "Berlin, Germany", "types": ["locality"]}
             ],
@@ -85,6 +115,21 @@ _SEARCH_PAYLOADS = [
         },
     },
     {
+        "name": "Berlin – Internship (QA & Testing)",
+        "payload": {
+            "searchQuery": "internship QA test quality assurance tester",
+            "locations": [
+                {"formatted_address": "Berlin, Germany", "types": ["locality"]}
+            ],
+            "workplaceTypes": ["Onsite", "Hybrid", "Remote"],
+            "roleYoeRange": [0, 1],
+            "dateFetchedPastNDays": 3,
+            "sortBy": "date_posted",
+            "page": 1,
+            "pageSize": 30,
+        },
+    },
+    {
         "name": "Berlin – Praktikum (DE keyword)",
         "payload": {
             "searchQuery": "praktikum softwareentwicklung data python backend",
@@ -104,6 +149,21 @@ _SEARCH_PAYLOADS = [
         "name": "Germany Remote – Working Student / Intern (Tech)",
         "payload": {
             "searchQuery": "working student intern software data ai remote",
+            "locations": [
+                {"formatted_address": "Germany", "types": ["country"]}
+            ],
+            "workplaceTypes": ["Remote"],
+            "roleYoeRange": [0, 2],
+            "dateFetchedPastNDays": 3,
+            "sortBy": "date_posted",
+            "page": 1,
+            "pageSize": 40,
+        },
+    },
+    {
+        "name": "Germany Remote – QA & Tech Support",
+        "payload": {
+            "searchQuery": "working student QA test technical support remote",
             "locations": [
                 {"formatted_address": "Germany", "types": ["country"]}
             ],
@@ -171,7 +231,7 @@ def _post_search(client: httpx.Client, payload: dict) -> list[dict]:
             "Consider enabling Playwright mode or running locally.",
             resp.status_code,
         )
-        return []
+        return None
     resp.raise_for_status()
     data = resp.json()
     # API may return {"jobs": [...]} or a direct list
@@ -195,7 +255,11 @@ def fetch_jobs() -> list[Job]:
                 raw_jobs = _post_search(client, search["payload"])
             except Exception as exc:
                 logger.error("HiringCafe search '%s' failed: %s", search["name"], exc)
-                raw_jobs = []
+                break
+
+            if raw_jobs is None:
+                # Cloudflare blocked; avoid wasting time on further attempts
+                break
 
             for raw in raw_jobs:
                 job = _parse_job(raw)

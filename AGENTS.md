@@ -63,14 +63,14 @@ The project is an autonomous job discovery, application optimization, and person
 ## 🔑 Critical Rules & Technical Decisions
 
 ### 1. Gemini AI Model Selection
-- **Active Model:** Always use **`gemini-3.6-flash`**.
-  - `gemini-1.5-flash` returns `404 Not Found`.
-  - `gemini-2.5-flash` is deprecated for new users.
+- **Active Model:** Primary is **`gemini-3.8-flash`** with automatic candidate fallback (`gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-flash-latest`).
+  - `gemini-1.5-flash`, `gemini-2.0-flash`, and `gemini-2.5-flash` return `404 Not Found` (deprecated for new users).
+  - Use `generate_content_with_fallback()` from `src.ai_assistant` for resilient API calls.
   - Initializing model in code:
     ```python
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-3.6-flash")
+    model = genai.GenerativeModel("gemini-3.8-flash")
     ```
 
 ### 2. Strict German Filter Pipeline (`src/filters.py`)

@@ -213,7 +213,9 @@ def fetch_jobs() -> list[Job]:
 
     with httpx.Client(timeout=REQUEST_TIMEOUT, follow_redirects=True, headers=_HEADERS) as client:
         candidates = fetch_candidate_urls(client)
-        logger.info("Workwise found %d candidate URLs to inspect", len(candidates))
+        from src.database import is_duplicate
+        candidates = [u for u in candidates if not is_duplicate(u)]
+        logger.info("Workwise found %d new candidate URLs to inspect", len(candidates))
         if not candidates:
             return []
 

@@ -1,12 +1,16 @@
 # Secrets & credentials
 .env
 *.json
-!data/master_cv.json
+!data/master_cv.json.example
 !.devcontainer/*.json
+data/master_cv.json
 service_account.json
 
 # Database
 data/jobs.db
+*.db
+*.sqlite
+*.sqlite3
 
 # Python
 __pycache__/
@@ -42,6 +46,9 @@ logs/
 # Generated output files (cover letters, CVs)
 output/
 *.docx
+*.pdf
+data/*.docx
+data/*.pdf
 
 # Testing
 .pytest_cache/

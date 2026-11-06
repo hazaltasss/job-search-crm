@@ -23,33 +23,29 @@ from src.config import (
     REMOTE_KEYWORDS,
     WORKING_STUDENT_PATTERNS,
     INTERN_PATTERNS,
+    TARGET_LOCATIONS,
+    TARGET_SEARCH_KEYWORDS,
 )
 
 logger = logging.getLogger(__name__)
 
-# Targeted search queries aligned with Hazal's profile & criteria
-_SEARCH_QUERIES = [
-    {
-        "search_term": "working student data science machine learning",
-        "location": "Berlin, Germany",
-        "results_wanted": 25,
-    },
-    {
-        "search_term": "working student software engineer python",
-        "location": "Berlin, Germany",
-        "results_wanted": 25,
-    },
-    {
-        "search_term": "internship data science software engineer",
-        "location": "Berlin, Germany",
-        "results_wanted": 25,
-    },
-    {
-        "search_term": "working student remote data software",
-        "location": "Germany",
-        "results_wanted": 20,
-    },
-]
+
+def _build_search_queries() -> list[dict]:
+    """Generate consolidated, non-overlapping search queries to maximize relevant yield while keeping latency low."""
+    primary_loc = TARGET_LOCATIONS[0] if TARGET_LOCATIONS else "Berlin"
+    if "germany" not in primary_loc.lower() and "remote" not in primary_loc.lower():
+        primary_loc = f"{primary_loc}, Germany"
+
+    # Consolidated queries covering Data, AI, Software, QA, and IT Working Student / Intern roles
+    return [
+        {"search_term": "working student software data ai", "location": primary_loc, "results_wanted": 25},
+        {"search_term": "working student tech QA IT automation", "location": primary_loc, "results_wanted": 20},
+        {"search_term": "internship software data", "location": primary_loc, "results_wanted": 15},
+    ]
+
+
+# Targeted search queries aligned with configured criteria
+_SEARCH_QUERIES = _build_search_queries()
 
 
 def _make_job_id(job_url: str) -> str:
@@ -84,8 +80,12 @@ def _parse_jobspy_row(row: dict, now_iso: str) -> Optional[Job]:
             return None
 
         company = str(row.get("company") or row.get("company_name") or "").strip() or "Unknown"
-        location = str(row.get("location") or "Berlin, Germany").strip()
+        raw_loc = str(row.get("location") or "").strip()
         description = str(row.get("description") or "").strip()
+        if raw_loc:
+            location = raw_loc
+        else:
+            location = "Berlin, Germany" if "berlin" in description.lower() else "Germany"
 
         is_remote_flag = bool(row.get("is_remote", False))
         loc_lower = location.lower()
@@ -130,21 +130,17 @@ def fetch_jobs(
     """
     target_queries = queries or _SEARCH_QUERIES
     now_iso = datetime.now(timezone.utc).isoformat()
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     seen_urls: set[str] = set()
     collected_jobs: list[Job] = []
 
-    logger.info("Starting LinkedIn fetch across %d queries...", len(target_queries))
-
-    for idx, q in enumerate(target_queries, start=1):
+    def _run_single_query(q: dict) -> list[Job]:
         search_term = q["search_term"]
         location = q["location"]
         results_wanted = q.get("results_wanted", 20)
 
-        logger.info(
-            "LinkedIn query [%d/%d]: '%s' in '%s' (wanted: %d)",
-            idx, len(target_queries), search_term, location, results_wanted,
-        )
-
+        logger.info("LinkedIn querying: '%s' in '%s' (wanted: %d)", search_term, location, results_wanted)
         try:
             df = scrape_jobs(
                 site_name=["linkedin"],
@@ -158,29 +154,30 @@ def fetch_jobs(
             )
         except Exception as exc:
             logger.error("LinkedIn scrape failed for '%s': %s", search_term, exc)
-            continue
+            return []
 
         if df is None or df.empty:
             logger.info("LinkedIn query '%s' returned 0 results.", search_term)
-            time.sleep(1.0)
-            continue
+            return []
 
-        query_jobs_count = 0
+        q_jobs = []
         for _, row in df.iterrows():
-            row_dict = row.to_dict()
-            job = _parse_jobspy_row(row_dict, now_iso)
-            if job and job.url not in seen_urls:
-                seen_urls.add(job.url)
-                collected_jobs.append(job)
-                query_jobs_count += 1
+            job = _parse_jobspy_row(row.to_dict(), now_iso)
+            if job:
+                q_jobs.append(job)
+        logger.info("LinkedIn query '%s': %d raw returned, %d relevant student/intern jobs kept", search_term, len(df), len(q_jobs))
+        return q_jobs
 
-        logger.info(
-            "LinkedIn query '%s': %d total returned, %d relevant student/intern jobs kept",
-            search_term, len(df), query_jobs_count,
-        )
-
-        # Politeness sleep between queries
-        time.sleep(1.0)
+    with ThreadPoolExecutor(max_workers=min(3, len(target_queries))) as pool:
+        futures = [pool.submit(_run_single_query, q) for q in target_queries]
+        for f in as_completed(futures):
+            try:
+                for job in f.result():
+                    if job.url not in seen_urls:
+                        seen_urls.add(job.url)
+                        collected_jobs.append(job)
+            except Exception as exc:
+                logger.error("Query future error: %s", exc)
 
     logger.info(
         "LinkedIn fetch complete: %d unique relevant jobs collected.",

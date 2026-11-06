@@ -83,40 +83,53 @@ def _connection() -> Generator[sqlite3.Connection, None, None]:
 import re
 
 def normalize_company(name: str) -> str:
-    """Normalize company name by removing entity forms and extra formatting."""
+    """Normalize company name by removing entity forms, domain TLDs, and extra formatting."""
     if not name:
         return ""
     s = name.lower().strip()
+    s = re.sub(r"[˚°]", "", s)
+    s = re.sub(r"-\s*excellence\s+in\s+.*", "", s, flags=re.IGNORECASE)
+    # Strip domain extensions
+    s = re.sub(r"\.(ai|io|de|com|tech|co|org|eu|net)\b", "", s, flags=re.IGNORECASE)
     # Remove corporate suffixes and annotations
     suffixes = [
         r"\(yc\s+s\d+\)",
         r"\(all genders\)",
         r"\|\s*b\s*corp",
-        r"\bgmbh\b",
-        r"\bag\b",
-        r"\bse\b",
-        r"\binc\.?\b",
-        r"\bincorporated\b",
-        r"\bcorp\.?\b",
-        r"\bgroup\b",
-        r"\bltd\.?\b",
-        r"\blimited\b",
-        r"\btechnologies\b",
+        r"\bgmbh\s*(?:&|und)?\s*co\.?\s*(?:kgaa|kg)?\b",
+        r"\b(gmbh|ag|se|inc|incorporated|corp|corporation|group|ltd|limited|technologies|solutions|careers|deutschland|germany|holding|holdings|mobility|services|systeme|it)\b",
     ]
     for suf in suffixes:
         s = re.sub(suf, "", s, flags=re.IGNORECASE)
-    s = re.sub(r"[^\w\s]", "", s)
+    s = re.sub(r"[^\w\s]", " ", s)
     return " ".join(s.split())
 
 
 def normalize_title(title: str) -> str:
-    """Normalize job title by removing gender suffixes and punctuation."""
+    """Normalize job title by removing gender suffixes, location/date noise, and standardizing terms."""
     if not title:
         return ""
     s = title.lower().strip()
-    # Remove gender suffixes like (m/f/d), (m/w/d), (f/m/x), etc.
-    s = re.sub(r"\((m/f/d|f/m/d|m/w/d|f/m/x|m/f/x|d/f/m|f/m/div|all genders)\)", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"[^\w\s]", "", s)
+    # Remove gender brackets/tags e.g. (m/f/d), [m/w/d], (m|w|d), (x/f/m), (gn), (all genders)
+    s = re.sub(
+        r"[\(\[\{]\s*(?:[mfdwxvi\/\s\|\-\+]{2,10}|[mfwxd]|all genders|alle geschlechter|gn|diverse?|div)\s*[\)\]\}]"
+        r"|[-–—/]\s*(?:[mfdwxvi\/\s\|\-\+]{2,10}|all genders|gn)\b",
+        " ", s, flags=re.IGNORECASE
+    )
+    # Remove trailing/embedded location tags
+    s = re.sub(r"[-–—/,\(]\s*(?:berlin|germany|deutschland|remote|hybrid|onsite)[\)\s]*", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bin\s+(?:berlin|germany|deutschland)\b", " ", s, flags=re.IGNORECASE)
+    # Remove date noise & hiring terms
+    s = re.sub(r"[-–—/,\(]\s*(?:january|february|march|april|may|june|july|august|september|october|november|december|\d{4})[^\)]*[\)]?", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"\b(?:unpaid|mandatory|compulsory|voluntary|freiwillig|pflichtpraktikum)\b", " ", s, flags=re.IGNORECASE)
+    # Standardize common equivalent role variations
+    s = re.sub(r"\bwerkstudent(?:in|innen|\(in\))?\b", "working student", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bpraktikant(?:in|innen|\(in\))?\b", "intern", s, flags=re.IGNORECASE)
+    s = re.sub(r"\binternship\b", "intern", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bsoftware engineering\b", "software engineer", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bdata engineering\b", "data engineer", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bai engineering\b", "ai engineer", s, flags=re.IGNORECASE)
+    s = re.sub(r"[^\w\s]", " ", s)
     return " ".join(s.split())
 
 
@@ -139,9 +152,9 @@ def init_db() -> None:
             except sqlite3.OperationalError:
                 pass  # Column already exists
 
-        # Backfill existing rows that have empty norm_company or norm_title
+        # Backfill all rows to ensure consistent normalized forms
         rows = conn.execute(
-            "SELECT id, company, title FROM jobs WHERE (norm_company = '' OR norm_company IS NULL) OR (norm_title = '' OR norm_title IS NULL)"
+            "SELECT id, company, title FROM jobs"
         ).fetchall()
         for r in rows:
             nc = normalize_company(r["company"] or "")
@@ -152,7 +165,126 @@ def init_db() -> None:
             )
 
         conn.execute(_CREATE_DEDUP_INDEX)
+    deduplicate_database()
+    purge_invalid_location_jobs()
     logger.info("Database initialised at %s", DB_PATH)
+
+
+def deduplicate_database() -> int:
+    """
+    Finds and merges duplicate job records across different platforms/sources in SQLite.
+    Preserves applied jobs ('status' = 'applied') and backfills any richer details into the master row.
+    Returns the number of duplicate records removed.
+    """
+    with _connection() as conn:
+        rows = conn.execute(
+            "SELECT id, company, title, url, source, status, applied_at, match_score, description, sheet_row FROM jobs ORDER BY id ASC"
+        ).fetchall()
+        if not rows:
+            return 0
+
+        clusters = []
+        for r in rows:
+            r_dict = dict(r)
+            r_nc = normalize_company(r_dict["company"] or "")
+            r_nt = normalize_title(r_dict["title"] or "")
+            r_dict["norm_c"] = r_nc
+            r_dict["norm_t"] = r_nt
+
+            matched_cluster = None
+            for cluster in clusters:
+                lead = cluster[0]
+                if r_nt and r_nt == lead["norm_t"]:
+                    c1, c2 = r_nc, lead["norm_c"]
+                    if c1 == c2 or (len(c1) >= 3 and c1 in c2) or (len(c2) >= 3 and c2 in c1):
+                        matched_cluster = cluster
+                        break
+            if matched_cluster is not None:
+                matched_cluster.append(r_dict)
+            else:
+                clusters.append([r_dict])
+
+        dup_clusters = [c for c in clusters if len(c) > 1]
+        deleted_count = 0
+
+        for cluster in dup_clusters:
+            # Prioritize applied status, then match_score, then lowest id
+            sorted_c = sorted(
+                cluster,
+                key=lambda x: (
+                    1 if x["status"] == "applied" else 0,
+                    x["match_score"] or 0,
+                    -x["id"],
+                ),
+                reverse=True,
+            )
+            keeper = sorted_c[0]
+            losers = sorted_c[1:]
+
+            update_fields = {}
+            if any(l["status"] == "applied" for l in losers) and keeper["status"] != "applied":
+                update_fields["status"] = "applied"
+                for l in losers:
+                    if l.get("applied_at"):
+                        update_fields["applied_at"] = l["applied_at"]
+                        break
+
+            for l in losers:
+                if not keeper.get("description") and l.get("description"):
+                    keeper["description"] = l["description"]
+                    update_fields["description"] = l["description"]
+                if (keeper.get("match_score") or 0) == 0 and (l.get("match_score") or 0) > 0:
+                    keeper["match_score"] = l["match_score"]
+                    update_fields["match_score"] = l["match_score"]
+
+            if update_fields:
+                set_clauses = [f"{k} = ?" for k in update_fields.keys()]
+                conn.execute(
+                    f"UPDATE jobs SET {', '.join(set_clauses)} WHERE id = ?",
+                    list(update_fields.values()) + [keeper["id"]],
+                )
+
+            for loser in losers:
+                conn.execute("DELETE FROM jobs WHERE id = ?", (loser["id"],))
+                deleted_count += 1
+
+        if deleted_count > 0:
+            logger.info("Deduplicated database: merged and removed %d duplicate job entries", deleted_count)
+
+        return deleted_count
+
+
+def purge_invalid_location_jobs() -> int:
+    """
+    Remove jobs from SQLite that are located in other physical German cities (Hamburg, Munich, etc.)
+    and are not Berlin or genuinely full remote.
+    Preserves jobs already marked as 'applied' to protect user tracking history.
+    """
+    from src.filters import _check_location
+    from src.models import Job
+
+    purged = 0
+    with _connection() as conn:
+        rows = conn.execute("SELECT id, job_id, source, title, company, location, url, description, status FROM jobs").fetchall()
+        for r in rows:
+            if r["status"] == "applied":
+                continue
+            mock_j = Job(
+                job_id=r["job_id"],
+                source=r["source"],
+                title=r["title"],
+                company=r["company"] or "",
+                location=r["location"] or "",
+                url=r["url"],
+                description=r["description"] or "",
+            )
+            passes, is_berlin, is_remote = _check_location(mock_j)
+            if not passes:
+                conn.execute("DELETE FROM jobs WHERE id = ?", (r["id"],))
+                purged += 1
+    if purged > 0:
+        logger.info("Purged %d invalid non-Berlin/onsite jobs from database", purged)
+    return purged
 
 
 # ─── Deduplication ────────────────────────────────────────────────────────────
@@ -182,14 +314,18 @@ def is_duplicate(url: str, title: str = "", company: str = "") -> bool:
         if row:
             return True
 
-        # Fuzzy: one company name is a substring of the other (scoped to same normalized title)
+        # Fuzzy: company name matching/substring on the exact same normalized title
         rows = conn.execute(
             "SELECT norm_company FROM jobs WHERE norm_title = ?",
             (norm_t,),
         ).fetchall()
         for r in rows:
             ex_c = r["norm_company"] or ""
-            if (len(norm_c) >= 4 and norm_c in ex_c) or (len(ex_c) >= 4 and ex_c in norm_c):
+            if not ex_c:
+                continue
+            if norm_c == ex_c:
+                return True
+            if (len(norm_c) >= 3 and norm_c in ex_c) or (len(ex_c) >= 3 and ex_c in norm_c):
                 return True
 
     return False
@@ -244,6 +380,10 @@ def update_status(db_id: int, status: str, applied_date: Optional[str] = None) -
                 WHERE id = ?
                 """,
                 (status, now_date, db_id),
+            )
+        elif status == "new":
+            conn.execute(
+                "UPDATE jobs SET status = ?, applied_at = '' WHERE id = ?", (status, db_id)
             )
         else:
             conn.execute(
@@ -357,7 +497,7 @@ DEFAULT_PROFILE_ID = "default_hazal"
 
 def ensure_default_profile(cv_data: dict | None = None) -> str:
     """
-    Ensure the default Hazal Taş profile exists in the database.
+    Ensure the default candidate profile exists in the database.
     If missing or empty, populates it from data/master_cv.json or the provided cv_data.
     """
     with _connection() as conn:
@@ -372,7 +512,7 @@ def ensure_default_profile(cv_data: dict | None = None) -> str:
 
         if not row:
             data_to_save = cv_data if cv_data is not None else (master_cv or {})
-            name = data_to_save.get("personal", {}).get("name", "Hazal Taş")
+            name = data_to_save.get("personal", {}).get("name", "Candidate")
             headline = "M.Sc. Data Analytics & AI | Computer Engineer"
             conn.execute(
                 """
@@ -383,19 +523,37 @@ def ensure_default_profile(cv_data: dict | None = None) -> str:
             )
             logger.info("Created default profile: %s", DEFAULT_PROFILE_ID)
         elif cv_data is not None:
-            name = cv_data.get("personal", {}).get("name", "Hazal Taş")
+            name = cv_data.get("personal", {}).get("name", "Candidate")
             headline = "M.Sc. Data Analytics & AI | Computer Engineer"
             conn.execute(
                 "UPDATE profiles SET name = ?, headline = ?, data_json = ? WHERE id = ?",
                 (name, headline, json.dumps(cv_data, ensure_ascii=False), DEFAULT_PROFILE_ID),
             )
-        elif master_cv and len(row["data_json"]) < 300:
-            name = master_cv.get("personal", {}).get("name", "Hazal Taş")
-            headline = "M.Sc. Data Analytics & AI | Computer Engineer"
-            conn.execute(
-                "UPDATE profiles SET name = ?, headline = ?, data_json = ? WHERE id = ?",
-                (name, headline, json.dumps(master_cv, ensure_ascii=False), DEFAULT_PROFILE_ID),
-            )
+        elif master_cv:
+            should_full_sync = len(row["data_json"]) < 300
+            if not should_full_sync:
+                try:
+                    curr_json = json.loads(row["data_json"])
+                    pers = curr_json.get("personal", {})
+                    curr_li = pers.get("linkedin", "")
+                    curr_gh = pers.get("github", "")
+                    if "[LinkedIn" in curr_li or "[GitHub" in curr_gh or not curr_li or not curr_gh:
+                        pers["linkedin"] = master_cv.get("personal", {}).get("linkedin", curr_li)
+                        pers["github"] = master_cv.get("personal", {}).get("github", curr_gh)
+                        curr_json["personal"] = pers
+                        conn.execute(
+                            "UPDATE profiles SET data_json = ? WHERE id = ?",
+                            (json.dumps(curr_json, ensure_ascii=False), DEFAULT_PROFILE_ID),
+                        )
+                except Exception:
+                    should_full_sync = True
+            if should_full_sync:
+                name = master_cv.get("personal", {}).get("name", "Candidate")
+                headline = "M.Sc. Data Analytics & AI | Computer Engineer"
+                conn.execute(
+                    "UPDATE profiles SET name = ?, headline = ?, data_json = ? WHERE id = ?",
+                    (name, headline, json.dumps(master_cv, ensure_ascii=False), DEFAULT_PROFILE_ID),
+                )
     return DEFAULT_PROFILE_ID
 
 
@@ -480,6 +638,16 @@ def save_profile(name: str, headline: str, data: dict, profile_id: str | None = 
                 (profile_id, name, headline, json_str, now, now),
             )
     return profile_id
+
+
+def delete_job(job_id: int) -> bool:
+    """Permanently delete a job from the database by its primary ID."""
+    with _connection() as conn:
+        cursor = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        deleted = cursor.rowcount > 0
+    if deleted:
+        logger.info("Deleted job db_id=%s from database", job_id)
+    return deleted
 
 
 def delete_profile(profile_id: str) -> bool:

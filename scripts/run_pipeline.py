@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 
-def main() -> None:
+def main(progress_callback=None) -> dict:
     run_start = datetime.now(timezone.utc)
     console.rule("[bold blue]Job Search CRM — Fetch Run")
     logger.info("Run started at %s UTC", run_start.strftime("%Y-%m-%d %H:%M:%S"))
@@ -46,14 +46,15 @@ def main() -> None:
         init_db()
     except Exception as exc:
         logger.error("Database init failed: %s", exc)
-        sys.exit(1)
+        return {"error": str(exc), "raw_count": 0, "passed_count": 0, "new_count": 0}
 
-    # ── Step 2: Fetch (Concurrent across all 9 sources) ────────────────────────
+    # ── Step 2: Fetch (Concurrent across all 10 sources) ───────────────────────
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from src.fetchers.arbeitnow import fetch_jobs as fetch_arbeitnow
     from src.fetchers.workingstudentjobs import fetch_jobs as fetch_wsj
     from src.fetchers.hiringcafe import fetch_jobs as fetch_hiringcafe
     from src.fetchers.linkedin import fetch_jobs as fetch_linkedin
+    from src.fetchers.indeed import fetch_jobs as fetch_indeed
     from src.fetchers.berlinstartupjobs import fetch_jobs as fetch_bsj
     from src.fetchers.greenhouse import fetch_jobs as fetch_greenhouse
     from src.fetchers.workwise import fetch_jobs as fetch_workwise
@@ -61,10 +62,11 @@ def main() -> None:
     from src.fetchers.jobteaser import fetch_jobs as fetch_jobteaser
 
     fetcher_tasks = {
-        "Arbeitnow": lambda: fetch_arbeitnow(max_pages=8),
+        "Arbeitnow": lambda: fetch_arbeitnow(max_pages=4),
         "WorkingStudentJobs": lambda: fetch_wsj(max_pages=2),
         "HiringCafe": lambda: fetch_hiringcafe(),
         "LinkedIn": lambda: fetch_linkedin(),
+        "Indeed": lambda: fetch_indeed(),
         "BerlinStartupJobs": lambda: fetch_bsj(),
         "Greenhouse": lambda: fetch_greenhouse(),
         "Workwise": lambda: fetch_workwise(),
@@ -76,7 +78,7 @@ def main() -> None:
     fetch_errors = []
     source_counts = {}
 
-    with ThreadPoolExecutor(max_workers=9) as pool:
+    with ThreadPoolExecutor(max_workers=10) as pool:
         futures = {
             pool.submit(fn): name
             for name, fn in fetcher_tasks.items()
@@ -88,17 +90,31 @@ def main() -> None:
                 raw_jobs.extend(jobs)
                 source_counts[name] = len(jobs)
                 logger.info("%s: %d raw jobs fetched", name, len(jobs))
+                if progress_callback:
+                    progress_callback("source", f"{name}: {len(jobs)} jobs fetched", {"source": name, "count": len(jobs)})
             except Exception as exc:
                 logger.error("%s fetch failed: %s", name, exc)
                 fetch_errors.append(f"{name}: {exc}")
                 source_counts[name] = 0
+                if progress_callback:
+                    progress_callback("source_error", f"{name}: Error ({exc})", {"source": name, "count": 0})
 
     if not raw_jobs:
         msg = "No raw jobs fetched from any source."
         logger.warning(msg)
-        return
+        elapsed = (datetime.now(timezone.utc) - run_start).total_seconds()
+        return {
+            "raw_count": 0,
+            "passed_count": 0,
+            "new_count": 0,
+            "saved_count": 0,
+            "source_counts": source_counts,
+            "elapsed": elapsed,
+        }
 
     # ── Step 3: Filter ────────────────────────────────────────────────────────
+    if progress_callback:
+        progress_callback("filter", f"Running smart filters across {len(raw_jobs)} total listings...", {})
     from src.filters import filter_jobs
     filtered_jobs = filter_jobs(raw_jobs)
     logger.info(
@@ -106,6 +122,8 @@ def main() -> None:
     )
 
     # ── Step 4: Deduplicate ───────────────────────────────────────────────────
+    if progress_callback:
+        progress_callback("dedup", f"Deduplicating {len(filtered_jobs)} qualified jobs against database...", {})
     from src import database
     seen_batch_keys = set()
     new_jobs = []
@@ -127,7 +145,15 @@ def main() -> None:
 
     if not new_jobs:
         logger.info("No new jobs to send. All matching jobs are already in database.")
-        return
+        elapsed = (datetime.now(timezone.utc) - run_start).total_seconds()
+        return {
+            "raw_count": len(raw_jobs),
+            "passed_count": len(filtered_jobs),
+            "new_count": 0,
+            "saved_count": 0,
+            "source_counts": source_counts,
+            "elapsed": elapsed,
+        }
 
     # ── Step 5: Store in DB & Optional Sheet / Telegram Sync ──────────────────
     import os
@@ -205,6 +231,14 @@ def main() -> None:
             pass
 
     logger.info("✅ Done! Sent %d new job alerts in %.1fs.", sent_count, elapsed)
+    return {
+        "raw_count": len(raw_jobs),
+        "passed_count": len(filtered_jobs),
+        "new_count": len(new_jobs),
+        "saved_count": saved_count,
+        "source_counts": source_counts,
+        "elapsed": elapsed,
+    }
 
 
 if __name__ == "__main__":

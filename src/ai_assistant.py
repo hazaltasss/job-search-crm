@@ -10,6 +10,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import time
 
 import google.generativeai as genai
 
@@ -19,26 +20,99 @@ from src.models import Job
 logger = logging.getLogger(__name__)
 
 # ─── Gemini Setup (lazy — configured on first use) ────────────────────────────
-_model_instance = None
+_cached_models: dict = {}
 
-def _get_model():
-    global _model_instance
-    if _model_instance is None:
-        if not GEMINI_API_KEY:
-            raise EnvironmentError(
-                "GEMINI_API_KEY is not set. Add it to your .env file.\n"
-                "Get a free key at: https://aistudio.google.com/app/apikey"
-            )
-        genai.configure(api_key=GEMINI_API_KEY)
-        _model_instance = genai.GenerativeModel(
-            model_name="gemini-3.6-flash",
+def _get_model(model_name: str = "gemini-3.8-flash"):
+    global _cached_models
+    if not GEMINI_API_KEY:
+        raise EnvironmentError(
+            "GEMINI_API_KEY is not set. Add it to your .env file.\n"
+            "Get a free key at: https://aistudio.google.com/app/apikey"
+        )
+    genai.configure(api_key=GEMINI_API_KEY)
+    if model_name not in _cached_models:
+        _cached_models[model_name] = genai.GenerativeModel(
+            model_name=model_name,
             generation_config=genai.types.GenerationConfig(
                 temperature=0.7,
                 top_p=0.9,
                 max_output_tokens=2048,
             ),
         )
-    return _model_instance
+    return _cached_models[model_name]
+
+
+_model_cooldowns: dict = {}
+
+
+def _extract_retry_delay(err_str: str) -> float:
+    """Extract retry delay in seconds from Gemini quota error string."""
+    m_sec = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)", err_str)
+    if m_sec:
+        return float(m_sec.group(1))
+    m_h = re.search(r"retry in (\d+)h(\d+)m", err_str)
+    if m_h:
+        return float(m_h.group(1)) * 3600 + float(m_h.group(2)) * 60
+    m_s = re.search(r"retry in (\d+(?:\.\d+)?)s", err_str)
+    if m_s:
+        return float(m_s.group(1))
+    return 0.0
+
+
+def generate_content_with_fallback(prompt: str, generation_config=None):
+    """
+    Generate content with automatic fallback across models.
+    Prioritizes ultra-fast, high-quota models (gemini-3.5-flash-lite, gemini-flash-lite-latest),
+    followed by standard flash models (gemini-3.6-flash, gemini-3.7-flash, gemini-3.8-flash).
+    Immediately advances to the next candidate on 429 quota exhaustion without stalling.
+    """
+    candidate_models = [
+        "gemini-3.5-flash-lite",
+        "gemini-flash-lite-latest",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+    ]
+    last_err = None
+    had_quota_err = None
+    now = time.time()
+
+    for m_name in candidate_models:
+        # Check if model is on cooldown (e.g. quota limit reached)
+        if now < _model_cooldowns.get(m_name, 0):
+            remaining = int(_model_cooldowns[m_name] - now)
+            logger.debug("Skipping model '%s' (cooldown: %ds remaining)", m_name, remaining)
+            continue
+
+        try:
+            model = _get_model(model_name=m_name)
+            if generation_config:
+                return model.generate_content(prompt, generation_config=generation_config)
+            return model.generate_content(prompt)
+        except Exception as err:
+            last_err = err
+            err_str = str(err)
+            if "429" in err_str or "quota" in err_str.lower() or "resource has been exhausted" in err_str.lower():
+                had_quota_err = err
+                delay = _extract_retry_delay(err_str)
+                cooldown = max(delay, 180.0)
+                _model_cooldowns[m_name] = time.time() + cooldown
+                logger.warning(
+                    "Gemini model '%s' hit quota limit (429). Cooldown %ds. Advancing immediately to next candidate...",
+                    m_name, int(cooldown)
+                )
+                continue  # Immediately advance to next model, zero sleep!
+
+            if "404" in err_str or "not found" in err_str.lower() or "is no longer available" in err_str.lower():
+                logger.warning("Gemini model '%s' unavailable (%s). Trying next candidate...", m_name, err_str[:120])
+                continue
+
+            raise err
+
+    if had_quota_err:
+        raise had_quota_err
+    raise last_err
 
 
 # ─── CV Loader ────────────────────────────────────────────────────────────────
@@ -101,8 +175,7 @@ def _cv_summary(cv: dict) -> str:
 
 # ─── Cover Letter Generator ───────────────────────────────────────────────────
 _COVER_LETTER_PROMPT = """
-You are an expert career coach and professional writer. Generate a tailored, compelling
-cover letter in ENGLISH for the following job application.
+You are an expert career coach and senior technical recruiter in Germany. Write a highly tailored, compelling, and authentic cover letter in professional ENGLISH for the candidate (Hazal Taş, M.Sc. student in Data Analytics & AI at Steinbeis University Berlin; B.Sc. in Computer Engineering).
 
 APPLICANT PROFILE:
 {cv_summary}
@@ -111,19 +184,39 @@ TARGET JOB:
 Title: {job_title}
 Company: {company}
 Location: {location}
-Job Description:
+Full Job Description:
 {description}
 
-INSTRUCTIONS:
-1. Write a professional, warm, and confident cover letter (3-4 paragraphs, ~300 words).
-2. Personalize it: mention the company name and specific role.
-3. Highlight the most relevant skills and experiences from the applicant's profile that match the job.
-4. Use natural, modern language. Avoid clichés.
-5. End with a confident call-to-action.
-6. Format it ready to send (no placeholders left).
-7. Do NOT include subject line or email headers — just the letter body.
+CRITICAL ROLE-FIRST WRITING INSTRUCTIONS (NO GENERIC FLUFF, DIRECT ROLE ADAPTATION):
+1. ROLE-FIRST DOMAIN DIAGNOSIS & HOOK (PARAGRAPH 1):
+   - First, diagnose the PRIMARY technical and operational domain of this target role from the full job description:
+     * If IT Support / Systems / IT Operations: The hook and entire tone MUST focus on IT support, hardware/software troubleshooting, Linux/Windows environments, ticket resolution, network fundamentals, and end-user satisfaction.
+     * If Data Analytics / Business Intelligence: The hook MUST focus on data analysis, SQL queries, business metrics, dashboards, and deriving actionable insights.
+     * If QA / Testing: The hook MUST focus on software reliability, structured test cases, API integration testing (Postman), edge-case validation, and bridging developer-tester communication.
+     * If Software / Backend Engineering: The hook MUST focus on API microservices, Spring Boot, FastAPI, clean code, database optimization, and scalability.
+     * If AI / Machine Learning / Data Science: The hook MUST focus on LLMs, RAG pipelines, vector search, and model deployment.
+   - STRICT RULE: Do NOT force an "AI/LLM specialist" identity onto a non-AI role! If the job is QA or IT Support, do NOT open talking about neural networks or RAG pipelines; a recruiter will immediately dismiss the candidate as mismatched or uninterested in QA/IT support.
+   - Start paragraph 1 with an authentic, domain-focused hook connecting Hazal's engineering mindset directly to {company}'s specific needs.
 
-Output only the cover letter text, starting with "Dear Hiring Team at {company}," or similar.
+2. CONCRETE TECHNICAL PROOF POINTS (PARAGRAPH 2):
+   - Directly address 2-3 specific technical requirements from the job description.
+   - Ground each point in Hazal's real experience (Computer Engineering B.Sc., Softtech internship, backend systems, database schemas, and automation scripts).
+   - Adapt the angle of her experience to the target domain:
+     * For QA / Software Testing roles: Emphasize her engineering approach to quality, rigorous API testing using Postman & Swagger/OpenAPI at Softtech, designing test cases, validating payload schemas and edge cases, bug reporting in Jira, and writing test scripts.
+     * For IT Support / Operations roles: Emphasize her practical debugging, Postman API testing, MySQL schema indexing, cross-platform issue resolution at Softtech, and automated pipeline monitoring with GitHub Actions and Python scripts.
+     * For Data / Backend / AI roles: Emphasize the corresponding relevant projects and metrics.
+
+3. THE COMPLEMENTARY SUPERPOWER & AVAILABILITY (PARAGRAPH 3):
+   - Position her Computer Engineering degree and current M.Sc. studies in Berlin as an ADDED VALUE / MULTIPLIER for this specific role:
+     * For QA / Testing: Her Computer Engineering background means she understands backend architecture and code, enabling deeper testing, root-cause identification, and seamless collaboration with core developers.
+     * For IT Support: Her software engineering foundation and familiarity with modern automation/AI tools enable her to write Python scripts to automate repetitive support tasks, triage tickets faster, and systematically diagnose technical root causes.
+     * For Data/Analytics: Her AI coursework brings modern analytical approaches to core business reporting.
+   - State clearly: Fully eligible and available in Berlin / Germany for a working student role (up to 20h/week during semester, full-time during breaks), fast onboarding, and high ownership.
+
+4. STRUCTURE:
+   - 3 to 4 focused paragraphs, ~300-350 words.
+   - Confident call to action (interview invitation).
+   - Output ONLY the body of the cover letter, starting with "Dear Hiring Team at {company}," or similar, and ending with "Sincerely,\nHazal Taş".
 """
 
 def generate_cover_letter(job: Job) -> str:
@@ -139,11 +232,11 @@ def generate_cover_letter(job: Job) -> str:
         job_title=job.title,
         company=job.company,
         location=job.location,
-        description=job.description[:3000] if job.description else "(See job URL)",
+        description=job.description.strip() if job.description else "(See job URL)",
     )
 
     logger.info("Generating cover letter for: %s @ %s", job.title, job.company)
-    response = _get_model().generate_content(prompt)
+    response = generate_content_with_fallback(prompt)
     return response.text.strip()
 
 
@@ -205,7 +298,7 @@ def tailor_cv(job: Job) -> str:
     )
 
     logger.info("Tailoring CV for: %s @ %s", job.title, job.company)
-    response = _get_model().generate_content(prompt)
+    response = generate_content_with_fallback(prompt)
     return response.text.strip()
 
 
@@ -337,14 +430,15 @@ def generate_cover_letter_pdf(
 
     # 1. Header
     pers = cv.get("personal", {})
-    story.append(Paragraph(_esc(pers.get("name", "HAZAL TAŞ").upper()), name_style))
+    name = pers.get("name") or "CANDIDATE NAME"
+    story.append(Paragraph(_esc(name.upper()), name_style))
 
     contacts = [
-        pers.get("location", "Berlin, Germany"),
-        pers.get("phone", "+49 155 1098 2021"),
-        pers.get("email", "hazaltas.623@gmail.com"),
-        pers.get("linkedin", "[LinkedIn Profile Link]"),
-        pers.get("github", "[GitHub Profile Link]"),
+        pers.get("location", ""),
+        pers.get("phone", ""),
+        pers.get("email", ""),
+        pers.get("linkedin", ""),
+        pers.get("github", ""),
     ]
     contacts = [c for c in contacts if c]
     story.append(Paragraph(" | ".join([_esc(c) for c in contacts]), contact_style))
@@ -401,7 +495,7 @@ def generate_cover_letter_docx(
 
     # Name
     p_name = doc.add_paragraph()
-    r_name = p_name.add_run(pers.get("name", "HAZAL TAŞ").upper())
+    r_name = p_name.add_run((pers.get("name") or "CANDIDATE NAME").upper())
     r_name.bold = True
     r_name.font.size = Pt(16)
     r_name.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
@@ -409,11 +503,11 @@ def generate_cover_letter_docx(
     # Contact
     p_con = doc.add_paragraph()
     contacts = [
-        pers.get("location", "Berlin, Germany"),
-        pers.get("phone", "+49 155 1098 2021"),
-        pers.get("email", "hazaltas.623@gmail.com"),
-        pers.get("linkedin", "[LinkedIn Profile Link]"),
-        pers.get("github", "[GitHub Profile Link]"),
+        pers.get("location", ""),
+        pers.get("phone", ""),
+        pers.get("email", ""),
+        pers.get("linkedin", ""),
+        pers.get("github", ""),
     ]
     r_con = p_con.add_run(" | ".join([c for c in contacts if c]))
     r_con.font.size = Pt(9)
@@ -465,17 +559,26 @@ def save_cover_letter_docx(text: str, job: Job) -> Path:
 # ─── CV Optimization for Dashboard ───────────────────────────────────────────
 
 _OPTIMIZE_PROMPT = """
-You are a senior ATS optimization expert and technical resume writer.
+You are a senior ATS optimization expert and technical resume writer in Germany.
 
 TASK: Tailor the applicant's resume for the target job while keeping all facts 100% truthful.
-1. Tailor the 2-3 sentence PROFESSIONAL SUMMARY to highlight the candidate's technical profile, educational foundation, and domain expertise relevant to this target role.
-2. Rewrite the experience and project bullet points to naturally integrate the missing skills where the underlying work already implies them.
+1. Tailor the 2-3 sentence PROFESSIONAL SUMMARY so that its PRIMARY FOCUS matches the target job's specific domain (e.g. IT Support, Data Analytics, Backend, AI).
+2. Rewrite experience and project bullet points to emphasize relevant technical aspects matching the role.
 
-CRITICAL RULES FOR PROFESSIONAL SUMMARY (CV / RESUME):
-- This summary goes onto an ATS CV / Resume, NOT a Cover Letter.
+CRITICAL ROLE-FIRST CV ADAPTATION RULES:
+- The base CV is the single source of truth for all historical facts, BUT the CV's professional summary, bullet point emphasis, and skill prioritization MUST directly adapt to the TARGET JOB'S PRIMARY DOMAIN:
+  * If the job is IT Support / Systems / IT Operations:
+    The Professional Summary MUST lead with IT systems, software engineering discipline, troubleshooting, OS/network fundamentals, and workflow automation.
+    DO NOT describe the candidate as an exclusive "Generative AI & RAG specialist". Frame her AI and Computer Engineering background as an analytical foundation and automation strength that enables faster ticket triage and automated scripting.
+  * If the job is Data Analytics / BI:
+    Lead with data analysis, SQL, statistical modeling, dashboards, and business insights.
+  * If the job is Software / Backend Engineering:
+    Lead with backend architectures, RESTful APIs, Spring Boot, FastAPI, databases, and microservices.
+  * If the job is AI / Machine Learning:
+    Lead with LLM architectures, RAG, vector search, and multimodal pipelines.
 - STRICTLY FORBIDDEN: NEVER mention the target company name ({company}) in the summary or anywhere in the CV.
 - STRICTLY FORBIDDEN: NEVER write subjective, personal motivational statements about wanting to work with, join, or contribute to this specific company (e.g., do NOT write "Highly motivated to contribute within {company}...", "Seeking to join {company}", "Excited to work at {company}"). Cover-letter style declarations belong ONLY in a cover letter!
-- The professional summary must remain 100% company-agnostic, objective, and professional: focus purely on Hazal's technical identity (Computer Engineer and M.Sc. student in Data Analytics & AI), core competencies, relevant technical stack (e.g., Python, SQL, data pipelines, schema design, CI/CD), and engineering capabilities aligned with the role's domain.
+- The professional summary must remain 100% company-agnostic, objective, and professional: focus purely on the candidate's technical identity, core competencies, relevant technical stack, and engineering capabilities aligned with the role's domain.
 
 APPLICANT PROFILE (JSON):
 {cv_json}
@@ -483,25 +586,29 @@ APPLICANT PROFILE (JSON):
 TARGET JOB:
 Title: {job_title}
 Target Domain / Context: (Company name must NOT be mentioned in the CV)
-Description:
+Full Job Description:
 {description}
 
 SKILLS ALREADY IN CV: {found_skills}
 SKILLS MISSING FROM CV (integrate naturally where truthful): {missing_skills}
+CURRENT MATCH SCORE: {current_score}%
 
 INSTRUCTIONS:
 1. PROFESSIONAL SUMMARY:
    - 2 to 3 sentences in formal CV style.
    - Company-agnostic: NEVER mention {company}.
    - No cover-letter motivational declarations ("motivated to contribute at...", "seeking to join...", etc.).
-   - Highlight candidate's technical profile, academic foundation (M.Sc. Data Analytics & AI, B.Sc. Computer Engineering), and relevant technical capabilities matching the position's requirements.
+   - Directly aligned with the target role's core responsibilities and domain.
 2. Rewrite ONLY the experience and project bullet points that can be truthfully enhanced.
 3. Naturally weave in missing skills where the underlying work already implies them.
 4. Keep all facts 100% accurate — do NOT invent companies, dates, degrees, or fictional experience.
 5. Use strong action verbs and quantify where possible. Preserve bullet label prefixes where applicable (e.g. "API & Backend Development: ...").
-6. Format output as JSON with this exact structure:
+6. Provide structured feedback on the enhancements made:
+   - "added_technologies": Explicit list of specific technologies, tools, libraries, or core domain keywords you added or strongly emphasized in the CV bullets/summary (e.g. ["Docker", "FastAPI", "PostgreSQL", "CI/CD"]). If no new tools were added, list the top 2-3 existing technical skills emphasized for this role.
+   - "key_changes": List of 1 to 3 concise, concrete bullet points describing the improvements made (e.g. "Tailored summary toward IT operations and troubleshooting", "Highlighted database and API testing responsibilities").
+7. Format output as JSON with this exact structure:
 {{
-  "tailored_summary": "Objective 2-3 sentence technical professional summary. Strictly NO company names and NO motivational 'seeking to join' statements.",
+  "tailored_summary": "Objective 2-3 sentence technical professional summary matching the role's domain. Strictly NO company names and NO motivational 'seeking to join' statements.",
   "optimized_experience": [
     {{
       "role": "Software Engineering Intern @ Softtech A.Ş.",
@@ -527,9 +634,15 @@ INSTRUCTIONS:
       "bullets": ["..."]
     }}
   ],
-  "estimated_new_score": 88,
-  "optimization_notes": "Brief explanation of what was improved"
+  "estimated_new_score": 95,
+  "optimization_notes": "Brief explanation of what was improved (e.g. enhanced keywords, tightened metrics, alignment with domain)",
+  "added_technologies": ["Docker", "FastAPI", "PostgreSQL"],
+  "key_changes": [
+    "Integrated Docker and FastAPI into Softtech backend bullets",
+    "Highlighted CI/CD and data pipeline metrics in projects"
+  ]
 }}
+NOTE: "estimated_new_score" MUST NOT be lower than {current_score}%. If current match score is 100%, return 100.
 
 Return ONLY valid JSON. No markdown fences, no extra text.
 """
@@ -657,6 +770,7 @@ def optimize_cv_for_job(
     found_skills: list[str],
     missing_skills: list[str],
     cv: dict | None = None,
+    current_score: int = 0,
 ) -> dict:
     """
     Dashboard'daki "Optimize CV" butonu için.
@@ -681,12 +795,13 @@ def optimize_cv_for_job(
         cv_json=json.dumps(compact_cv, ensure_ascii=False, indent=2),
         job_title=job_title,
         company=job_company,
-        description=job_description[:2500] if job_description else "(See job URL)",
+        description=job_description.strip() if job_description else "(See job URL)",
         found_skills=", ".join(found_skills[:15]) or "none detected",
         missing_skills=", ".join(missing_skills[:15]) or "none",
+        current_score=current_score,
     )
 
-    logger.info("Optimizing CV for: %s @ %s", job_title, job_company)
+    logger.info("Optimizing CV for: %s @ %s (current_score=%d)", job_title, job_company, current_score)
 
     last_exc = None
     # Retry up to 2 times
@@ -698,10 +813,12 @@ def optimize_cv_for_job(
                 max_output_tokens=4096,
                 response_mime_type="application/json",
             )
-            response = _get_model().generate_content(prompt, generation_config=config)
+            response = generate_content_with_fallback(prompt, generation_config=config)
         except Exception as api_err:
+            if "429" in str(api_err) or "quota" in str(api_err).lower():
+                raise api_err
             logger.warning("Generation with response_mime_type failed (%s), falling back to default", api_err)
-            response = _get_model().generate_content(prompt)
+            response = generate_content_with_fallback(prompt)
 
         raw = response.text.strip() if (response and response.text) else ""
         try:
@@ -715,12 +832,85 @@ def optimize_cv_for_job(
                 data["optimization_notes"] = data["notes"]
             if "new_score" in data and "estimated_new_score" not in data:
                 data["estimated_new_score"] = data["new_score"]
+            if "technologies" in data and "added_technologies" not in data:
+                data["added_technologies"] = data["technologies"]
+            if "skills_added" in data and "added_technologies" not in data:
+                data["added_technologies"] = data["skills_added"]
+            if "skills" in data and "added_technologies" not in data and isinstance(data["skills"], list):
+                data["added_technologies"] = data["skills"]
+            if "changes" in data and "key_changes" not in data:
+                data["key_changes"] = data["changes"]
 
             # Ensure keys exist with sensible defaults
             data.setdefault("optimized_experience", [])
             data.setdefault("optimized_projects", [])
-            data.setdefault("estimated_new_score", 85)
             data.setdefault("optimization_notes", "")
+            data.setdefault("added_technologies", [])
+            data.setdefault("key_changes", [])
+
+            # Normalize added_technologies
+            raw_techs = data["added_technologies"]
+            if isinstance(raw_techs, str):
+                data["added_technologies"] = [t.strip() for t in raw_techs.split(",") if t.strip()]
+            elif isinstance(raw_techs, list):
+                data["added_technologies"] = [str(t).strip() for t in raw_techs if str(t).strip()]
+            else:
+                data["added_technologies"] = []
+
+            # Normalize key_changes
+            raw_changes = data["key_changes"]
+            if isinstance(raw_changes, str):
+                data["key_changes"] = [c.strip() for c in raw_changes.splitlines() if c.strip()]
+            elif isinstance(raw_changes, list):
+                data["key_changes"] = [str(c).strip() for c in raw_changes if str(c).strip()]
+            else:
+                data["key_changes"] = []
+
+            # Fallback & Supplement: Detect missing skills that are now present in tailored CV text
+            opt_corpus = (
+                data.get("tailored_summary", "") + " " +
+                " ".join(
+                    " ".join(exp.get("bullets", []))
+                    for exp in data.get("optimized_experience", [])
+                    if isinstance(exp, dict)
+                ) + " " +
+                " ".join(
+                    " ".join(proj.get("bullets", []))
+                    for proj in data.get("optimized_projects", [])
+                    if isinstance(proj, dict)
+                )
+            ).lower()
+
+            existing_techs_lower = {t.lower() for t in data["added_technologies"]}
+            if missing_skills and isinstance(missing_skills, list):
+                for ms in missing_skills:
+                    if ms and isinstance(ms, str) and ms.lower() not in existing_techs_lower:
+                        pattern = r"\b" + re.escape(ms.lower()) + r"\b"
+                        if re.search(pattern, opt_corpus):
+                            data["added_technologies"].append(ms.strip())
+                            existing_techs_lower.add(ms.lower())
+
+            # If key_changes is still empty but optimization_notes has text, derive bullet points
+            if not data["key_changes"] and data.get("optimization_notes"):
+                note_str = str(data["optimization_notes"]).strip()
+                if ";" in note_str:
+                    data["key_changes"] = [p.strip() for p in note_str.split(";") if p.strip()]
+                elif "\n" in note_str:
+                    data["key_changes"] = [p.strip("•- \t") for p in note_str.splitlines() if p.strip("•- \t")]
+                elif note_str:
+                    data["key_changes"] = [note_str]
+
+            # Ensure estimated_new_score is at least current_score
+            raw_new_score = data.get("estimated_new_score", current_score or 85)
+            try:
+                parsed_score = int(raw_new_score)
+            except (ValueError, TypeError):
+                parsed_score = current_score or 85
+
+            if current_score >= 100:
+                data["estimated_new_score"] = 100
+            else:
+                data["estimated_new_score"] = min(100, max(current_score, parsed_score))
 
             # Sanitize tailored_summary to guarantee no company references slip through
             if "tailored_summary" in data and isinstance(data["tailored_summary"], str):
@@ -813,7 +1003,7 @@ def refine_cv_bullet(bullet: str, action: str, job_context: str = "") -> str:
     prompt = build_micro_action_prompt(bullet, action, job_context)
     try:
         config = genai.types.GenerationConfig(temperature=0.2, max_output_tokens=256)
-        response = _get_model().generate_content(prompt, generation_config=config)
+        response = generate_content_with_fallback(prompt, generation_config=config)
         cleaned = response.text.strip()
         cleaned = re.sub(r"^[•\-\*\s]+", "", cleaned)
         cleaned = cleaned.strip('"\'')
@@ -831,7 +1021,7 @@ def build_copilot_prompt(
     company: str = "",
     description: str = "",
 ) -> str:
-    """Construct prompt for the CV Copilot conversational assistant."""
+    """Construct prompt for the CV Copilot conversational assistant with intent recognition."""
     history_lines = []
     for m in chat_history[-6:]:
         role = "User" if m.get("role") == "user" else "Assistant"
@@ -847,7 +1037,7 @@ def build_copilot_prompt(
     }
 
     return f"""You are an expert AI Career Copilot and technical resume strategist.
-The candidate is reviewing and interactively editing their tailored CV for a specific target job.
+The candidate is reviewing, discussing, and interactively editing their tailored CV for a specific target job.
 
 TARGET JOB:
 Title: {job_title}
@@ -860,22 +1050,41 @@ CURRENT CV WORKING STATE (JSON):
 RECENT CHAT HISTORY:
 {history_str}
 
-CANDIDATE'S EDIT REQUEST:
+CANDIDATE'S INPUT:
 "{user_prompt}"
 
-INSTRUCTIONS:
-1. Carefully interpret what the candidate wants to modify in their CV (e.g. adjusting a specific bullet, adding a technology, shortening the summary, rephrasing a project).
-2. Modify ONLY the requested parts of the CV working state while keeping everything else intact.
-3. Keep all factual experience 100% accurate — do not invent degrees or fictional companies.
-4. If the candidate asks a question or makes an edit, provide a friendly, helpful 1-2 sentence explanation of what was updated.
-5. Format your output as JSON with this exact schema:
+TASK & INTENT RECOGNITION:
+First determine the candidate's intent:
+1. "question": The candidate is asking a question, asking for clarification, checking what was done (e.g. "go ekledin mi?", "bu ilanda hangi yetenekler aranıyor?", "özeti neden değiştirdin?", "ATS skoru neden arttı?"), or asking for advice/recommendation.
+   - DO NOT modify the CV. Leave updated_cv as null.
+   - Answer the question directly, thoroughly, and accurately in Turkish based on the CURRENT CV WORKING STATE and the TARGET JOB description.
+   - For example, if asked whether a technology (like "Go", "Docker", etc.) is added or present ("go ekledin mi?"): check the CURRENT CV WORKING STATE (in skills, experience bullets, and projects). If it is already there, state where it appears. If it is NOT in the CV, clearly state that it is not currently included and explain why or offer to add it.
+2. "edit": The candidate wants to modify, add, remove, rewrite, shorten, or rephrase something in their CV (e.g. "Go'yu yeteneklere ekle", "özeti kısalt", "Twilio projesini sil", "Docker deneyimini öne çıkar").
+   - Modify ONLY the relevant sections in updated_cv (summary, experience, projects, skills). Keep everything else intact.
+   - If modifying skills, update the corresponding category list (e.g. "programming_languages", "backend_and_systems", "generative_ai_and_llms", "tools", "core_competencies").
+   - In assistant_message, provide a clear, friendly 1-2 sentence explanation in Turkish of what was updated.
+3. "both": The candidate is both asking a question AND requesting a change.
+   - Answer the question in assistant_message AND apply the edits in updated_cv.
+
+RULES:
+- Keep all factual experience 100% accurate — do not invent degrees or fictional companies.
+- Always provide a helpful response in Turkish for assistant_message.
+- Format your output as JSON with this exact schema:
 {{
-  "updated_cv": {{
+  "intent": "question" | "edit" | "both",
+  "assistant_message": "Clear explanation or direct answer to the question in Turkish.",
+  "updated_cv": null or {{
     "summary": "...",
     "experience": [ ... ],
-    "projects": [ ... ]
-  }},
-  "assistant_message": "A concise explanation in Turkish of what was modified (e.g. 'Softtech deneyimindeki 2. madde Docker ve CI/CD odaklı olarak güncellendi.')"
+    "projects": [ ... ],
+    "skills": {{
+      "programming_languages": [ ... ],
+      "generative_ai_and_llms": [ ... ],
+      "backend_and_systems": [ ... ],
+      "core_competencies": [ ... ],
+      "tools": [ ... ]
+    }}
+  }}
 }}
 
 Return ONLY valid JSON.
@@ -891,7 +1100,7 @@ def chat_refine_cv(
     description: str = "",
 ) -> tuple[dict, str]:
     """
-    Process candidate's conversational instruction, modify the current CV state,
+    Process candidate's conversational instruction or question, modify the CV if requested,
     and return (updated_cv, assistant_message).
     """
     prompt = build_copilot_prompt(
@@ -909,16 +1118,23 @@ def chat_refine_cv(
             max_output_tokens=4096,
             response_mime_type="application/json",
         )
-        response = _get_model().generate_content(prompt, generation_config=config)
+        response = generate_content_with_fallback(prompt, generation_config=config)
     except Exception as exc:
+        if "429" in str(exc) or "quota" in str(exc).lower():
+            raise exc
         logger.warning("Copilot with response_mime_type failed (%s), using fallback", exc)
-        response = _get_model().generate_content(prompt)
+        response = generate_content_with_fallback(prompt)
 
     raw_text = response.text.strip() if (response and response.text) else "{}"
     try:
         parsed = extract_json_from_text(raw_text)
-        updated_part = parsed.get("updated_cv", {})
-        msg = parsed.get("assistant_message", "CV belirtilen doğrultuda güncellendi.")
+        intent = str(parsed.get("intent", "edit")).lower()
+        msg = parsed.get("assistant_message", "").strip() or "İsteğiniz işlendi."
+        updated_part = parsed.get("updated_cv")
+
+        # If pure question or no valid updated_cv provided, do NOT mutate the CV
+        if intent == "question" or not updated_part or not isinstance(updated_part, dict):
+            return current_cv, msg
 
         new_cv = json.loads(json.dumps(current_cv))
         if "summary" in updated_part and isinstance(updated_part["summary"], str) and len(updated_part["summary"]) > 10:
@@ -927,6 +1143,12 @@ def chat_refine_cv(
             new_cv["experience"] = updated_part["experience"]
         if "projects" in updated_part and isinstance(updated_part["projects"], list) and updated_part["projects"]:
             new_cv["projects"] = updated_part["projects"]
+        if "skills" in updated_part and isinstance(updated_part["skills"], dict) and updated_part["skills"]:
+            if "skills" not in new_cv or not isinstance(new_cv["skills"], dict):
+                new_cv["skills"] = {}
+            for cat_k, cat_v in updated_part["skills"].items():
+                if isinstance(cat_v, list) and cat_v:
+                    new_cv["skills"][cat_k] = cat_v
 
         return new_cv, msg
 
@@ -935,10 +1157,131 @@ def chat_refine_cv(
         return current_cv, "Üzgünüm, isteğinizi uygularken bir sorun oluştu. Lütfen tekrar deneyin."
 
 
+def build_cover_letter_copilot_prompt(
+    current_cover_letter: str,
+    user_prompt: str,
+    chat_history: list[dict],
+    job_title: str = "",
+    company: str = "",
+    description: str = "",
+    cv: dict | None = None,
+) -> str:
+    """Construct prompt for the Cover Letter Copilot conversational assistant."""
+    history_lines = []
+    for m in chat_history[-6:]:
+        role = "User" if m.get("role") == "user" else "Assistant"
+        history_lines.append(f"{role}: {m.get('content', '')}")
+    history_str = "\n".join(history_lines) if history_lines else "(No previous conversation)"
+
+    cv_summary_str = _cv_summary(cv or _load_cv())
+
+    return f"""You are an elite Cover Letter Strategist and Career Mentor.
+The candidate (Hazal Taş, M.Sc. Data Analytics & AI at Steinbeis University Berlin, B.Sc. Computer Engineering) is reviewing, discussing, brainstorming, and interactively tailoring her Cover Letter for a specific target job.
+
+TARGET JOB:
+Title: {job_title}
+Company: {company}
+Description: {description[:2500] if description else '(Not specified)'}
+
+APPLICANT PROFILE:
+{cv_summary_str}
+
+CURRENT COVER LETTER WORKING DRAFT:
+\"\"\"
+{current_cover_letter}
+\"\"\"
+
+RECENT CHAT HISTORY:
+{history_str}
+
+CANDIDATE'S INPUT:
+"{user_prompt}"
+
+TASK & INTENT RECOGNITION:
+First determine the candidate's intent:
+1. "question": The candidate is asking for advice, brainstorming ideas, or asking a strategic question (e.g. "Sence bu ilanda Linux ve Docker'ı mı öne çıkaralım yoksa AI projelerimi mi?", "2. paragraf sence yeterince ikna edici mi?", "Şirketin hangi değerlerine değinebiliriz?").
+   - Act as an insightful mentor: give strategic, nuanced advice in Turkish explaining WHY and HOW to connect her background with this specific company and role.
+   - Do NOT modify the cover letter. Leave "updated_cover_letter" as null.
+2. "edit": The candidate wants to modify, refine, rephrase, expand, shorten, or rewrite part or all of the cover letter (e.g. "2. paragrafa Docker ve Linux ekle", "tonunu daha özgüvenli yap", "Softtech stajımdaki API projemle bağ kur", "girişi daha dikkat çekici yap").
+   - Revise the cover letter text in English according to the instruction.
+   - Maintain professional formatting, high persuasiveness, and authentic connection to {company}.
+   - Provide "updated_cover_letter" with the complete revised letter text in English.
+   - In "assistant_message", provide a friendly, encouraging explanation in Turkish describing what changes were made and why it enhances the application.
+3. "both": The candidate is brainstorming/asking a question AND wants the letter updated accordingly.
+   - Provide the strategic answer/explanation in Turkish in "assistant_message" AND provide the revised English letter in "updated_cover_letter".
+
+RULES:
+- The cover letter itself must ALWAYS be in professional English.
+- The assistant_message (conversation with candidate) must ALWAYS be in clear, supportive Turkish.
+- Keep all facts truthful to Hazal's profile — do not invent fictional employers or degrees.
+- Format your response as valid JSON with this exact schema:
+{{
+  "intent": "question" | "edit" | "both",
+  "assistant_message": "Türkçe stratejik değerlendirme, tavsiye veya yapılan değişikliğin açıklaması.",
+  "updated_cover_letter": null or "Full updated cover letter text in English..."
+}}
+
+Return ONLY valid JSON.
+"""
+
+
+def chat_refine_cover_letter(
+    current_cover_letter: str,
+    user_prompt: str,
+    chat_history: list[dict],
+    job_title: str = "",
+    company: str = "",
+    description: str = "",
+    cv: dict | None = None,
+) -> tuple[str, str]:
+    """
+    Process candidate's conversational instruction or question about the Cover Letter,
+    modify the letter if requested, and return (updated_cover_letter, assistant_message).
+    """
+    prompt = build_cover_letter_copilot_prompt(
+        current_cover_letter=current_cover_letter,
+        user_prompt=user_prompt,
+        chat_history=chat_history,
+        job_title=job_title,
+        company=company,
+        description=description,
+        cv=cv,
+    )
+
+    try:
+        config = genai.types.GenerationConfig(
+            temperature=0.3,
+            max_output_tokens=4096,
+            response_mime_type="application/json",
+        )
+        response = generate_content_with_fallback(prompt, generation_config=config)
+    except Exception as exc:
+        if "429" in str(exc) or "quota" in str(exc).lower():
+            raise exc
+        logger.warning("Cover Letter Copilot with response_mime_type failed (%s), using fallback", exc)
+        response = generate_content_with_fallback(prompt)
+
+    raw_text = response.text.strip() if (response and response.text) else "{}"
+    try:
+        parsed = extract_json_from_text(raw_text)
+        intent = str(parsed.get("intent", "edit")).lower()
+        msg = parsed.get("assistant_message", "").strip() or "Ön yazı isteğiniz doğrultusunda güncellendi."
+        updated_text = parsed.get("updated_cover_letter")
+
+        if intent == "question" or not updated_text or not isinstance(updated_text, str) or len(updated_text.strip()) < 50:
+            return current_cover_letter, msg
+
+        return updated_text.strip(), msg
+    except Exception as exc:
+        logger.error("Failed to parse Cover Letter Copilot response: %s (Raw: %s)", exc, raw_text[:200])
+        return current_cover_letter, "İsteğinizi işlerken bir sorun oluştu. Lütfen tekrar deneyin."
+
+
+
 def generate_cv_docx(cv: dict, output_path: Path | None = None) -> bytes:
     """
     Generate an ATS-compliant, professionally styled Word (.docx) document
-    matching the layout, typography, and structure of Hazal's base CV.
+    matching the layout, typography, and structure of the candidate's base CV.
     Returns the document bytes for direct download.
     """
     import io
@@ -973,7 +1316,7 @@ def generate_cv_docx(cv: dict, output_path: Path | None = None) -> bytes:
     p_name = doc.add_paragraph()
     p_name.paragraph_format.space_before = Pt(0)
     p_name.paragraph_format.space_after = Pt(2)
-    name_run = p_name.add_run(cv.get("personal", {}).get("name", "HAZAL TAŞ").upper())
+    name_run = p_name.add_run((cv.get("personal", {}).get("name") or "CANDIDATE NAME").upper())
     name_run.bold = True
     name_run.font.size = Pt(18)
     name_run.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
@@ -984,11 +1327,11 @@ def generate_cv_docx(cv: dict, output_path: Path | None = None) -> bytes:
     p_contact.paragraph_format.space_after = Pt(7)
     pers = cv.get("personal", {})
     contacts = [
-        pers.get("location", "Berlin, Germany"),
-        pers.get("phone", "+49 155 1098 2021"),
-        pers.get("email", "hazaltas.623@gmail.com"),
-        pers.get("linkedin", "[LinkedIn Profile Link]"),
-        pers.get("github", "[GitHub Profile Link]"),
+        pers.get("location", ""),
+        pers.get("phone", ""),
+        pers.get("email", ""),
+        pers.get("linkedin", ""),
+        pers.get("github", ""),
     ]
     contacts = [c for c in contacts if c]
     contact_run = p_contact.add_run(" | ".join(contacts))
@@ -1015,6 +1358,7 @@ def generate_cv_docx(cv: dict, output_path: Path | None = None) -> bytes:
         ("Generative AI & LLMs", skills.get("generative_ai_and_llms") or tech_skills.get("Generative AI & LLMs")),
         ("Backend & Systems", skills.get("backend_and_systems") or tech_skills.get("Backend & Systems")),
         ("Core Competencies", skills.get("core_competencies") or tech_skills.get("Core Competencies")),
+        ("Tools & Platforms", skills.get("tools") or tech_skills.get("Tools & Platforms")),
     ]
     for cat_name, cat_items in skill_rows:
         if not cat_items:
@@ -1145,7 +1489,7 @@ def generate_cv_docx(cv: dict, output_path: Path | None = None) -> bytes:
 def generate_cv_pdf(cv: dict, output_path: Path | None = None) -> bytes:
     """
     Generate an ATS-compliant, professionally styled PDF document
-    matching the layout, typography, and structure of Hazal's base CV.
+    matching the layout, typography, and structure of the candidate's base CV.
     Returns the PDF bytes for direct download.
     """
     import html
@@ -1294,15 +1638,16 @@ def generate_cv_pdf(cv: dict, output_path: Path | None = None) -> bytes:
     story = []
 
     # 1. Header: Name & Contact
-    story.append(Paragraph(_esc(cv.get("personal", {}).get("name", "HAZAL TAŞ").upper()), name_style))
+    name = cv.get("personal", {}).get("name") or "CANDIDATE NAME"
+    story.append(Paragraph(_esc(name.upper()), name_style))
 
     pers = cv.get("personal", {})
     contacts = [
-        pers.get("location", "Berlin, Germany"),
-        pers.get("phone", "+49 155 1098 2021"),
-        pers.get("email", "hazaltas.623@gmail.com"),
-        pers.get("linkedin", "[LinkedIn Profile Link]"),
-        pers.get("github", "[GitHub Profile Link]"),
+        pers.get("location", ""),
+        pers.get("phone", ""),
+        pers.get("email", ""),
+        pers.get("linkedin", ""),
+        pers.get("github", ""),
     ]
     contacts = [c for c in contacts if c]
     story.append(Paragraph(" | ".join([_esc(c) for c in contacts]), contact_style))
@@ -1321,6 +1666,7 @@ def generate_cv_pdf(cv: dict, output_path: Path | None = None) -> bytes:
         ("Generative AI & LLMs", skills.get("generative_ai_and_llms") or tech_skills.get("Generative AI & LLMs")),
         ("Backend & Systems", skills.get("backend_and_systems") or tech_skills.get("Backend & Systems")),
         ("Core Competencies", skills.get("core_competencies") or tech_skills.get("Core Competencies")),
+        ("Tools & Platforms", skills.get("tools") or tech_skills.get("Tools & Platforms")),
     ]
     for cat_name, cat_items in skill_rows:
         if not cat_items:
@@ -1394,13 +1740,12 @@ def generate_cv_pdf(cv: dict, output_path: Path | None = None) -> bytes:
 
 
 _FOLLOW_UP_PROMPT = """
-You are a career communications specialist helping Hazal Taş write a professional follow-up email regarding her job application in Berlin, Germany.
+You are a career communications specialist helping {candidate_name} write a professional follow-up email regarding a job application.
 
 Candidate Profile:
-- Name: Hazal Taş
-- Email: hazaltas.623@gmail.com
-- Degree: M.Sc. in Data Analytics & AI at Steinbeis University, Berlin
-- Background: Computer Engineer with practical experience in Python, Generative AI, RAG pipelines, API development
+- Name: {candidate_name}
+- Email: {candidate_email}
+- Background: {candidate_summary}
 
 Job Application Details:
 - Company: {company}
@@ -1410,11 +1755,11 @@ Job Application Details:
 
 Instructions:
 1. Write a polite, concise, and professional follow-up email in English (approx. 120-160 words).
-2. Include a clear subject line: "Subject: Follow-up: Application for {job_title} - Hazal Taş".
+2. Include a clear subject line: "Subject: Follow-up: Application for {job_title} - {candidate_name}".
 3. Acknowledge that the recruitment team is likely reviewing many candidates.
-4. Reiterate enthusiasm for {company} and briefly mention how Hazal's background in Data Analytics & AI aligns with the team's needs.
+4. Reiterate enthusiasm for {company} and briefly mention how the candidate's background aligns with the team's needs.
 5. Inquire if any additional information or portfolio samples are needed.
-6. Close professionally with contact information.
+6. Close professionally with the candidate's contact information.
 7. Return ONLY the plain text email (no markdown code blocks, no greetings to the user).
 """
 
@@ -1424,9 +1769,24 @@ def generate_follow_up_email(
     job_company: str,
     applied_date: str,
     job_description: str = "",
+    cv: dict | None = None,
 ) -> str:
     """Generate a tailored, professional follow-up email for a pending job application."""
+    if cv is None:
+        try:
+            cv = _load_master_cv()
+        except Exception:
+            cv = {}
+
+    pers = cv.get("personal", {})
+    cand_name = pers.get("name") or "Candidate"
+    cand_email = pers.get("email", "")
+    cand_summary = cv.get("summary", "Software Engineering & Data Analytics student")
+
     prompt = _FOLLOW_UP_PROMPT.format(
+        candidate_name=cand_name,
+        candidate_email=cand_email,
+        candidate_summary=cand_summary[:300],
         company=job_company,
         job_title=job_title,
         applied_date=applied_date or "recently",
@@ -1434,6 +1794,86 @@ def generate_follow_up_email(
     )
 
     logger.info("Generating follow-up email for %s @ %s", job_title, job_company)
-    response = _get_model().generate_content(prompt)
+    response = generate_content_with_fallback(prompt)
     return response.text.strip()
+
+
+_JOB_ANALYSIS_PROMPT = """You are an elite career advisor and technical recruiter evaluating a candidate's fit for a specific job posting.
+
+CANDIDATE PROFILE:
+{cv_summary}
+
+JOB POSTING:
+Position: {job_title}
+Company: {job_company}
+Full Description:
+{job_description}
+
+CRITICAL INSTRUCTIONS:
+1. Carefully analyze what this job REALLY requires (e.g. is it coding/backend, product operations, data analysis, AI tool usage, or business research?). Do NOT hallucinate skills that aren't asked for (e.g. do not claim "Go" programming language is required if the text only mentions "Go-to-Market").
+2. Compare the real job requirements against the candidate's actual qualifications in education (Master's in Data Analytics & AI), technical skills (Python, SQL, Generative AI, RAG), and projects.
+3. Return ONLY a valid JSON object with the following structure (no markdown fences, no explanatory prefix):
+{{
+  "role_summary": "1-2 sentence description in Turkish of the real core focus of this role (e.g. 'Ürün operasyonları ve iş verisi odaklı bir rol; yazılım mühendisliği aranmıyor, veri analitiği ve AI araçları kullanımı bekleniyor.')",
+  "match_score": 85,
+  "required_skills": [
+    {{"skill": "Skill or Domain Name", "status": "matched", "explanation": "Brief explanation in Turkish comparing job need vs candidate's background"}}
+  ],
+  "key_strengths": [
+    "Specific strength from candidate's CV directly matching the role"
+  ],
+  "missing_areas": [
+    "Specific area the candidate should address, study, or highlight in their application"
+  ],
+  "strategic_advice": "Actionable 2-3 sentence strategic advice in Turkish on how the candidate should position their application for maximum interview conversion."
+}}
+"""
+
+
+def analyze_job_with_gemini(
+    job_title: str,
+    job_company: str,
+    job_description: str,
+    cv: dict | None = None,
+) -> dict:
+    """
+    Perform deep LLM-based skill gap and role analysis using Gemini.
+    Provides semantic understanding far beyond static keyword matching.
+    """
+    if cv is None:
+        cv = _load_cv()
+
+    cv_summary_text = _cv_summary(cv)
+
+    prompt = _JOB_ANALYSIS_PROMPT.format(
+        cv_summary=cv_summary_text,
+        job_title=job_title,
+        job_company=job_company,
+        job_description=job_description.strip() if job_description else "(No description provided)",
+    )
+
+    logger.info("Performing Gemini Deep Analysis for %s @ %s", job_title, job_company)
+    config = genai.types.GenerationConfig(
+        temperature=0.2,
+        max_output_tokens=2048,
+        response_mime_type="application/json",
+    )
+    try:
+        response = generate_content_with_fallback(prompt, generation_config=config)
+    except Exception:
+        response = generate_content_with_fallback(prompt)
+
+    raw_text = response.text.strip() if response and response.text else "{}"
+    data = extract_json_from_text(raw_text)
+    if not data:
+        data = {
+            "role_summary": f"{job_title} pozisyonu ({job_company})",
+            "match_score": 60,
+            "required_skills": [],
+            "key_strengths": ["Analitik ve mühendislik altyapısı"],
+            "missing_areas": [],
+            "strategic_advice": "İlan gereksinimlerini CV'nizdeki somut projelerle destekleyerek başvurun.",
+        }
+    return data
+
 
